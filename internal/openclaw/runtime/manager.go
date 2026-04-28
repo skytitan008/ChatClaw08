@@ -935,7 +935,7 @@ func (m *Manager) reconcileLocked(restart bool) error {
 		GatewayPID:       pid,
 		GatewayURL:       gatewayURL(cfg.GatewayPort),
 	})
-	m.broadcastGatewayState(GatewayConnectionState{Connected: true, Authenticated: true})
+	m.broadcastGatewayState(GatewayConnectionState{Connected: true, Authenticated: true, Reconnecting: false, LastError: ""})
 	m.consecutiveFailures = 0
 	m.doctorTriggered = false
 	m.notifyReadyHooks()
@@ -1443,48 +1443,16 @@ func (m *Manager) reconnectClient() {
 				goto connected
 			}
 		}
+
+		// Always broadcast the error to frontend so the user sees what's happening.
+		// Don't silently trigger restarts — let the user know and give them a chance to act.
+		errMsg := err.Error()
 		m.app.Logger.Warn("openclaw: WS reconnect failed", "error", err)
-		m.consecutiveFailures++
-		if m.consecutiveFailures >= 3 && !m.doctorTriggered {
-			m.doctorTriggered = true
-			m.app.Logger.Warn("openclaw: consecutive WS failures exceeded threshold, triggering doctor auto-fix")
-			m.broadcastGatewayState(GatewayConnectionState{
-				Connected:     false,
-				Authenticated: false,
-				Reconnecting:  true,
-				LastError:     err.Error(),
-			})
-			go m.runDoctorAutoFix()
-			return
-		}
-		// Port is alive but WS keeps failing — a full reconcile (with process restart) can
-		// recover when the gateway process is stuck but the port appears occupied. This is
-		// the fix for the "error phase stuck" scenario: gateway is running (port open) but the
-		// WS handshake is consistently rejected. Only trigger when we already own the process.
-		m.mu.RLock()
-		ownsProcess := m.process != nil
-		m.mu.RUnlock()
-		if ownsProcess && gatewayPortOccupied(cfg.GatewayPort) {
-			m.app.Logger.Info("openclaw: WS reconnect failed after multiple attempts, triggering full reconcile")
-			m.broadcastGatewayState(GatewayConnectionState{
-				Connected:     false,
-				Authenticated: false,
-				Reconnecting:  true,
-				LastError:     err.Error(),
-			})
-			go func() {
-				// Run full reconcile with restart=true to cleanly stop/restart the gateway process.
-				if reconcileErr := m.reconcile(true); reconcileErr != nil {
-					m.app.Logger.Warn("openclaw: full reconcile after WS failure failed", "error", reconcileErr)
-				}
-			}()
-			return
-		}
 		m.broadcastGatewayState(GatewayConnectionState{
 			Connected:     false,
 			Authenticated: false,
 			Reconnecting:  true,
-			LastError:     err.Error(),
+			LastError:     errMsg,
 		})
 		return
 	}
@@ -1514,6 +1482,7 @@ connected:
 		Connected:     true,
 		Authenticated: true,
 		Reconnecting:  false,
+		LastError:     "",
 	})
 	m.app.Logger.Info("openclaw: WS reconnect succeeded", "pid", pid)
 }
@@ -2118,6 +2087,11 @@ func ensureOpenClawStateDir(bundle *bundledRuntime, defaultPort int, gatewayToke
 	if err := cleanCorruptedChatWikiModels(bundle.ConfigPath, log); err != nil {
 		log.Warn("openclaw: clean corrupted chatwiki models failed", "error", err, "config", bundle.ConfigPath)
 	}
+	// Clean up deprecated identity fields from agent entries in openclaw.json.
+	// OpenClaw 4.26+ no longer supports identity via RPC.
+	if err := cleanAgentsIdentity(bundle.ConfigPath, log); err != nil {
+		log.Warn("openclaw: clean agents identity failed", "error", err, "config", bundle.ConfigPath)
+	}
 	// Ensure gateway auth config is present before boot so token auth takes effect.
 	if err := ensureGatewayAuthConfig(bundle.ConfigPath, defaultPort, gatewayToken, log); err != nil {
 		log.Warn("openclaw: ensure gateway auth config failed", "error", err, "config", bundle.ConfigPath)
@@ -2274,6 +2248,60 @@ func cleanCorruptedChatWikiModels(configPath string, log *slog.Logger) error {
 	}
 	log.Info("openclaw: cleaned corrupted chatwiki models",
 		"removed", original-len(cleaned), "remaining", len(cleaned), "config", configPath)
+	return nil
+}
+
+// cleanAgentsIdentity removes the deprecated 'identity' field from agent entries
+// in openclaw.json. OpenClaw 4.26+ no longer supports identity via RPC,
+// and having stale identity config can cause sync failures.
+func cleanAgentsIdentity(configPath string, log *slog.Logger) error {
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	agents, ok := cfg["agents"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	list, ok := agents["list"].([]any)
+	if !ok {
+		return nil
+	}
+
+	cleaned := false
+	for _, item := range list {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, hasIdentity := entry["identity"]; hasIdentity {
+			delete(entry, "identity")
+			cleaned = true
+		}
+	}
+
+	if !cleaned {
+		return nil
+	}
+
+	out, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(configPath, out, 0o644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	log.Info("openclaw: cleaned deprecated identity fields from agents config",
+		"config", configPath)
 	return nil
 }
 

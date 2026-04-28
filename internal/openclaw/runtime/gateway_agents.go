@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"chatclaw/internal/define"
-	"chatclaw/internal/openclaw/agents"
+	openclawagents "chatclaw/internal/openclaw/agents"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -262,20 +262,11 @@ func (s *AgentService) buildAgentsSection(ctx context.Context) (map[string]any, 
 }
 
 func (s *AgentService) buildAgentEntry(agent openclawagents.OpenClawAgent) map[string]any {
-	identity := map[string]any{"name": agent.Name}
-	if agent.IdentityEmoji != "" {
-		identity["emoji"] = agent.IdentityEmoji
-	}
-	if agent.IdentityTheme != "" {
-		identity["theme"] = agent.IdentityTheme
-	}
-
 	entry := map[string]any{
 		"id":        agent.OpenClawAgentID,
 		"name":      agent.Name,
 		"workspace": s.resolveAgentWorkspace(agent),
 		"agentDir":  s.resolveAgentDir(agent),
-		"identity":  identity,
 	}
 	if agent.OpenClawAgentID == define.OpenClawMainAgentID {
 		entry["default"] = true
@@ -373,17 +364,10 @@ func (s *AgentService) createAgent(ctx context.Context, agent openclawagents.Ope
 	if agent.DefaultLLMProviderID != "" && agent.DefaultLLMModelID != "" {
 		params["model"] = agent.DefaultLLMProviderID + "/" + agent.DefaultLLMModelID
 	}
-	// Pass identity (emoji/theme) for OpenClaw console UI display.
-	identity := map[string]any{}
-	if agent.IdentityEmoji != "" {
-		identity["emoji"] = agent.IdentityEmoji
-	}
-	if agent.IdentityTheme != "" {
-		identity["theme"] = agent.IdentityTheme
-	}
-	if len(identity) > 0 {
-		params["identity"] = identity
-	}
+
+	// Note: OpenClaw 4.26+ no longer supports identity via RPC.
+	// identity emoji/theme are stored locally but not synced to Gateway.
+
 	var resp map[string]any
 	sendCreate := func() error {
 		resp = nil
@@ -433,17 +417,10 @@ func (s *AgentService) updateAgent(ctx context.Context, agent openclawagents.Ope
 	}
 	params["name"] = agent.Name
 	params["workspace"] = s.resolveAgentWorkspace(agent)
-	// Pass identity (emoji/theme) for OpenClaw console UI display.
-	identity := map[string]any{}
-	if agent.IdentityEmoji != "" {
-		identity["emoji"] = agent.IdentityEmoji
-	}
-	if agent.IdentityTheme != "" {
-		identity["theme"] = agent.IdentityTheme
-	}
-	if len(identity) > 0 {
-		params["identity"] = identity
-	}
+
+	// Note: OpenClaw 4.26+ no longer supports identity via RPC.
+	// identity emoji/theme are stored locally but not synced to Gateway.
+
 	if agent.DefaultLLMProviderID != "" && agent.DefaultLLMModelID != "" {
 		params["model"] = agent.DefaultLLMProviderID + "/" + agent.DefaultLLMModelID
 	}

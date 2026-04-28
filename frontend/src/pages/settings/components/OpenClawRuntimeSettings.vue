@@ -69,7 +69,11 @@ const isUpgrading = computed(() => status.value.phase === 'upgrading')
 const gatewayConnectionLabel = computed(() => {
   if (gatewayState.value.authenticated) return t('settings.openclawRuntime.gateway.authenticated')
   if (gatewayState.value.connected) return t('settings.openclawRuntime.gateway.connected')
-  if (gatewayState.value.reconnecting) return t('settings.openclawRuntime.gateway.reconnecting')
+  if (gatewayState.value.reconnecting) {
+    const err = gatewayState.value.lastError
+    if (err) return `${t('settings.openclawRuntime.gateway.reconnecting')} - ${err}`
+    return t('settings.openclawRuntime.gateway.reconnecting')
+  }
   return t('settings.openclawRuntime.gateway.disconnected')
 })
 
