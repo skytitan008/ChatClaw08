@@ -41,6 +41,7 @@ import (
 	"chatclaw/internal/services/settings"
 	"chatclaw/internal/services/skillmarket"
 	"chatclaw/internal/services/skills"
+	"chatclaw/internal/services/terminal"
 	"chatclaw/internal/services/textselection"
 	"chatclaw/internal/services/toolchain"
 	"chatclaw/internal/services/tray"
@@ -363,6 +364,9 @@ func NewApp(opts Options) (app *application.App, cleanup func(), err error) {
 	toolchainService := toolchain.NewToolchainService(app)
 	app.RegisterService(application.NewService(toolchainService))
 	openclawManager.SetToolchainService(toolchainService)
+	// 注册终端服务（提供集成终端，命令路由到管理的工具链）
+	terminalService := terminal.NewTerminalService(app, toolchainService)
+	app.RegisterService(application.NewService(terminalService))
 	// 注册 OpenClaw Runtime 服务（管理 OpenClaw Gateway 进程的生命周期）
 	configSvc := openclawruntime.NewConfigService(openclawManager)
 	configSvc.SetProvidersService(providersSvc)

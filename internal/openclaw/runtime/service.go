@@ -1,6 +1,7 @@
 package openclawruntime
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"runtime"
@@ -111,6 +112,12 @@ func (s *OpenClawRuntimeService) RunDoctorCommand(command string, fix bool) (*Do
 	return s.manager.RunDoctorCommand(command, fix)
 }
 
+// GetGatewayStatus executes `openclaw gateway status` to get the authoritative gateway state.
+// This is more reliable than port-based checks during transitional states like startup.
+func (s *OpenClawRuntimeService) GetGatewayStatus(ctx context.Context) (*GatewayStatusResult, error) {
+	return s.manager.GetGatewayStatusViaCLI(ctx)
+}
+
 func (s *OpenClawRuntimeService) GetDashboardURL() string {
 	cfg := s.manager.store.Get()
 	return fmt.Sprintf("http://127.0.0.1:%d?token=%s", cfg.GatewayPort, cfg.GatewayToken)
@@ -159,6 +166,21 @@ func (s *OpenClawRuntimeService) CheckPortOccupied() PortOccupiedResult {
 		ProcessName: processName,
 		PID:         pid,
 	}
+}
+
+// ClearGatewayLog truncates the gateway log file before starting.
+func (s *OpenClawRuntimeService) ClearGatewayLog() error {
+	return s.manager.ClearGatewayLog()
+}
+
+// GatewayLogTail returns the last n lines of the gateway log.
+func (s *OpenClawRuntimeService) GatewayLogTail(n int) (string, error) {
+	return s.manager.GatewayLogTail(n)
+}
+
+// GatewayLogPath returns the absolute path to the gateway log file.
+func (s *OpenClawRuntimeService) GatewayLogPath() (string, error) {
+	return s.manager.GatewayLogPath()
 }
 
 // getProcessNameByPID returns the process name for a given PID on Windows.

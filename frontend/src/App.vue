@@ -45,6 +45,9 @@ const OpenClawRuntimeEnvironmentPage = defineAsyncComponent(
 const OpenClawDashboardPage = defineAsyncComponent(
   () => import('@/pages/openclaw/OpenClawDashboardPage.vue')
 )
+const OpenClawTerminalPage = defineAsyncComponent(
+  () => import('@/pages/openclaw/OpenClawTerminalPage.vue')
+)
 const ToolsPage = defineAsyncComponent(() => import('@/pages/tools/ToolsPage.vue'))
 
 import { SnapService } from '@bindings/chatclaw/internal/services/windows'
@@ -171,6 +174,7 @@ const moduleComponents: Record<NavModule, unknown> = {
   'openclaw-runtime-environment': OpenClawRuntimeEnvironmentPage,
   'openclaw-cron': OpenClawCronPage,
   'openclaw-dashboard': OpenClawDashboardPage,
+  'openclaw-terminal': OpenClawTerminalPage,
   knowledge: KnowledgePage,
   'scheduled-tasks': ScheduledTasksPage,
   skills: SkillsPage,

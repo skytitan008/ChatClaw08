@@ -162,6 +162,7 @@ export default {
     assistant: 'Task Assistant',
     openclaw: 'OpenClaw',
     openclawDashboard: 'OpenClaw Dashboard',
+    openclawTerminal: 'Terminal',
     knowledge: 'Knowledge Base',
     scheduledTasks: 'Scheduled Tasks',
     skills: 'Skills',
@@ -294,6 +295,9 @@ export default {
       starting: 'Starting...',
       startSuccess: 'Gateway started',
       startFailed: 'Gateway failed to start',
+      gatewayLog: 'Gateway Log',
+      waitingForLog: 'Waiting for log output...',
+      viewGatewayLog: 'View Log',
       startSteps: {
         resolvedRuntime: 'Located runtime: {path}',
         hotfixApplied: 'Applied {count} hotfix file(s)',
@@ -2221,6 +2225,10 @@ export default {
       notInstalled:
         'OpenClaw runtime not detected. Go to Settings → General or OpenClaw Manager to install the runtime.',
     },
+  },
+  openclawTerminal: {
+    tools: 'Tools',
+    loading: 'Loading...',
   },
   openclawCron: {
     title: 'Scheduled Tasks',

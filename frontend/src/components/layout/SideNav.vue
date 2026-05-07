@@ -37,6 +37,7 @@ import IconChannels from '@/assets/icons/channels.svg'
 import IconSettings from '@/assets/icons/settings.svg'
 import IconChatClaw from '@/assets/icons/chatclaw.svg'
 import IconOpenClaw from '@/assets/icons/openclaw-logo.svg'
+import IconTerminal from '@/assets/icons/terminal.svg'
 import { Check } from 'lucide-vue-next'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import ChatWikiSidebarAccountCard from './ChatWikiSidebarAccountCard.vue'
@@ -238,6 +239,13 @@ const allTopNavItems: NavItem[] = [
     key: 'openclaw-runtime',
     labelKey: 'settings.menu.openclawRuntime',
     icon: IconSettings,
+    guiOnly: true,
+    systems: ['openclaw'],
+  },
+  {
+    key: 'openclaw-terminal',
+    labelKey: 'nav.openclawTerminal',
+    icon: IconTerminal,
     guiOnly: true,
     systems: ['openclaw'],
   },

@@ -17,6 +17,7 @@ export type NavModule =
   | 'openclaw-runtime-environment'
   | 'openclaw-cron'
   | 'openclaw-dashboard'
+  | 'openclaw-terminal'
   | 'knowledge'
   | 'scheduled-tasks'
   | 'memory'
@@ -106,6 +107,7 @@ const moduleLabels: Record<NavModule, string> = {
   'openclaw-runtime-environment': 'settings.menu.runtimeEnvironment',
   'openclaw-cron': 'nav.scheduledTasks',
   'openclaw-dashboard': 'nav.openclawDashboard',
+  'openclaw-terminal': 'nav.openclawTerminal',
   knowledge: 'nav.knowledge',
   'scheduled-tasks': 'nav.scheduledTasks',
   memory: 'nav.memory',
@@ -130,6 +132,7 @@ const singleTabModules: NavModule[] = [
   'openclaw-runtime-environment',
   'openclaw-cron',
   'openclaw-dashboard',
+  'openclaw-terminal',
   'knowledge',
   'scheduled-tasks',
   'memory',

@@ -9,9 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -49,6 +51,8 @@ type Manager struct {
 	// reconciling blocks pollClient from broadcasting PhaseRestarting during
 	// intentional restarts (reconcile), so the UI stays stable.
 	reconciling atomic.Bool
+
+	wsMu sync.Mutex // protects WebSocket connect/reconnect from concurrent calls
 
 	status       RuntimeStatus
 	gatewayState GatewayConnectionState
@@ -452,74 +456,141 @@ func (m *Manager) pollGateway() {
 	}
 }
 
-// pollClient probes the gateway port and attempts WebSocket reconnection.
+// pollClient probes the gateway state via `openclaw gateway status` CLI command
+// and attempts WebSocket reconnection when needed.
 // Completely passive: never restarts the process, never attempts OSS install,
 // and runs regardless of internal state (shuttingDown / reconnecting lock do not block it).
 // The only effect is updating Phase and GatewayState sent to the UI.
 func (m *Manager) pollClient() {
 	cfg := m.store.Get()
-	alive := gatewayPortOccupied(cfg.GatewayPort)
 
+	// Use `openclaw gateway status` CLI command to get the authoritative state.
+	// This is more reliable than port-based checks during transitional states.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cliStatus, cliErr := m.GetGatewayStatusViaCLI(ctx)
+	cancel()
+
+	// Log CLI status result for debugging
+	if cliErr != nil {
+		m.app.Logger.Debug("openclaw: gateway status CLI error", "error", cliErr)
+	}
+
+	// Determine if gateway is running according to CLI
+	cliRunning := cliStatus != nil && cliStatus.Running
+
+	// Check WebSocket connection state
 	m.mu.RLock()
 	connected := m.client != nil
 	m.mu.RUnlock()
 
+	// If CLI says running but WS is down, we need to verify if gateway is truly alive
+	// The `openclaw gateway status` command may only check port occupancy, not process health.
+	// A zombie process or port conflict can cause CLI to report "running" while WS fails.
+	if cliRunning && !connected {
+		// Skip if a reconcile (start/restart) is in progress - the startup will handle state
+		if m.reconciling.Load() {
+			return
+		}
+
+		m.app.Logger.Info("openclaw: CLI reports running but WS disconnected, verifying gateway health...")
+
+		// Attempt a quick WebSocket reconnect to verify if gateway is truly alive
+		if m.reconnecting.CompareAndSwap(false, true) {
+			go func() {
+				defer m.reconnecting.Store(false)
+
+				// Try a quick connection test with short timeout
+				testCtx, testCancel := context.WithTimeout(context.Background(), 3*time.Second)
+				testClient := NewGatewayClient(gatewayClientOptions{
+					URL:    gatewayWebSocketURL(cfg.GatewayPort),
+					Token:  cfg.GatewayToken,
+					Scopes: gatewayOperatorScopes(),
+				})
+				_, testErr := testClient.Connect(testCtx)
+				testCancel()
+
+				if testErr != nil {
+					// WebSocket failed to connect - gateway may still be starting up.
+					// Log and update GatewayConnectionState, but do NOT return from the poll loop.
+					// The main loop will continue to update gateway status based on CLI results.
+					testClient.Close()
+					m.app.Logger.Warn("openclaw: gateway WS health check failed, will retry",
+						"cliRunning", cliRunning,
+						"cliPID", cliStatus.PID,
+						"wsError", testErr)
+
+					m.broadcastGatewayState(GatewayConnectionState{
+						Connected:     false,
+						Authenticated: false,
+						Reconnecting:  true,
+						LastError:     errStr(testErr),
+					})
+					return
+				}
+
+				// WS connection succeeded, gateway is healthy
+				testClient.Close()
+				m.app.Logger.Info("openclaw: gateway health verified, attempting reconnect")
+				time.Sleep(500 * time.Millisecond)
+				m.reconnectClient()
+			}()
+		}
+		// Do NOT return here - continue to update gateway status based on CLI results.
+		// WS connection failure should not block the status update from CLI.
+	}
+
+	// Normal path: CLI says not running
+	if !cliRunning {
+		// Skip if a reconcile (start/restart) is in progress - don't interfere with startup
+		if m.reconciling.Load() {
+			return
+		}
+
+		m.mu.RLock()
+		prevPhase := m.status.Phase
+		m.mu.RUnlock()
+
+		// Only broadcast restart state if we were previously connected
+		if prevPhase == PhaseConnected || prevPhase == PhaseConnecting {
+			if !m.reconnecting.Load() {
+				m.broadcastStatus(RuntimeStatus{
+					Phase:      PhaseRestarting,
+					Message:    "OpenClaw Gateway not running",
+					GatewayURL: gatewayURL(cfg.GatewayPort),
+				})
+				m.broadcastGatewayState(GatewayConnectionState{
+					Connected:     false,
+					Authenticated: false,
+					Reconnecting:  false,
+					LastError:     "Gateway not running",
+				})
+			}
+		}
+		return
+	}
+
+	// CLI says running AND WS is connected - this is the happy path
+	// Just ensure UI reflects the correct phase
 	if connected {
-		// WS is up — if the UI still shows a degraded phase (e.g. "restarting" after
-		// NotifyGatewayRestarting), push the correct state so it updates immediately
-		// without waiting for the next GetStatus() poll.
 		m.mu.RLock()
 		phase := m.status.Phase
 		m.mu.RUnlock()
-		if phase != PhaseConnected {
+		if phase != PhaseConnected && !m.reconciling.Load() {
 			m.mu.RLock()
-			pid := m.processPID
 			version := m.status.InstalledVersion
 			runtimeSource := m.status.RuntimeSource
 			runtimePath := m.status.RuntimePath
 			m.mu.RUnlock()
-			cfg := m.store.Get()
 			m.broadcastStatus(RuntimeStatus{
 				Phase:            PhaseConnected,
 				Message:          "OpenClaw Gateway connected",
 				InstalledVersion: version,
 				RuntimeSource:    runtimeSource,
 				RuntimePath:      runtimePath,
-				GatewayPID:       pid,
+				GatewayPID:       cliStatus.PID,
 				GatewayURL:       gatewayURL(cfg.GatewayPort),
 			})
 		}
-		return
-	}
-
-	// Not connected — determine the right response based on gateway liveness.
-	// Skip if a reconcile is in progress (intentional restart), which manages its own broadcasts.
-	if !alive {
-		// Gateway not responding at all.
-		m.mu.RLock()
-		prevPhase := m.status.Phase
-		m.mu.RUnlock()
-		if prevPhase == PhaseConnected || prevPhase == PhaseConnecting || prevPhase == PhaseError {
-			if !m.reconciling.Load() {
-				m.broadcastStatus(RuntimeStatus{
-					Phase:      PhaseRestarting,
-					Message:    "OpenClaw Gateway not responding",
-					GatewayURL: gatewayURL(cfg.GatewayPort),
-				})
-			}
-		}
-		// No process, no port — nothing to reconnect to.
-		return
-	}
-
-	// Gateway is alive (port open) but WS is down — this is the recovery window.
-	// Attempt WS reconnect only if not already in progress.
-	if m.reconnecting.CompareAndSwap(false, true) {
-		go func() {
-			defer m.reconnecting.Store(false)
-			time.Sleep(500 * time.Millisecond)
-			m.reconnectClient()
-		}()
 	}
 }
 
@@ -724,15 +795,26 @@ func (m *Manager) reconcileLocked(restart bool) error {
 
 	cfg := m.store.Get()
 
-	fail := func(phase string, err error, version string, pid int) error {
-		m.app.Logger.Warn("openclaw: "+phase, "error", err)
+	fail := func(stepKey string, err error, version string, pid int) error {
+		m.app.Logger.Warn("openclaw: "+stepKey, "error", err)
 		msg := cleanErrorMessage(err.Error())
+
+		// Preserve startup steps on failure, append error as last step
+		m.mu.Lock()
+		if m.upgradeOutputBuf.Len() > 0 {
+			m.upgradeOutputBuf.WriteString(fmt.Sprintf("[ERROR] %s\n", msg))
+		}
+		steps := m.upgradeOutputBuf.String()
+		m.mu.Unlock()
+
+		// Use PhaseError so frontend maps to Stop state (showing the error)
 		m.broadcastStatus(RuntimeStatus{
-			Phase:            phase,
+			Phase:            PhaseError,
 			Message:          msg,
 			InstalledVersion: version,
 			GatewayPID:       pid,
 			GatewayURL:       gatewayURL(cfg.GatewayPort),
+			UpgradeOutput:    steps, // Keep steps visible on failure
 		})
 		return err
 	}
@@ -923,9 +1005,10 @@ func (m *Manager) reconcileLocked(restart bool) error {
 
 	m.mu.Lock()
 	m.readyAt = time.Now()
+	// Clear startup steps on successful connection
+	m.upgradeOutputBuf.Reset()
 	m.mu.Unlock()
 
-	m.appendStartStep("9. connected", version)
 	m.broadcastStatus(RuntimeStatus{
 		Phase:            PhaseConnected,
 		Message:          "OpenClaw Gateway connected",
@@ -934,6 +1017,7 @@ func (m *Manager) reconcileLocked(restart bool) error {
 		RuntimePath:      bundle.Root,
 		GatewayPID:       pid,
 		GatewayURL:       gatewayURL(cfg.GatewayPort),
+		UpgradeOutput:    "", // Clear steps on success
 	})
 	m.broadcastGatewayState(GatewayConnectionState{Connected: true, Authenticated: true, Reconnecting: false, LastError: ""})
 	m.consecutiveFailures = 0
@@ -1408,6 +1492,10 @@ func (m *Manager) reconnectClient() {
 	}
 	m.mu.Unlock()
 
+	// Use mutex to prevent concurrent reconnect attempts
+	m.wsMu.Lock()
+	defer m.wsMu.Unlock()
+
 	cfg := m.store.Get()
 	if m.process == nil && !gatewayPortOccupied(cfg.GatewayPort) {
 		m.app.Logger.Info("openclaw: skipping WS reconnect, no gateway process and port not listening")
@@ -1742,6 +1830,114 @@ func (m *Manager) ExecCLI(ctx context.Context, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// GetGatewayStatusViaCLI checks gateway health via HTTP /health endpoint.
+// This is more reliable than CLI commands which may only check port occupancy.
+func (m *Manager) GetGatewayStatusViaCLI(ctx context.Context) (*GatewayStatusResult, error) {
+	cfg := m.store.Get()
+	result := &GatewayStatusResult{
+		Port: cfg.GatewayPort,
+		URL:  gatewayURL(cfg.GatewayPort),
+	}
+
+	// Use HTTP health endpoint to check if gateway is truly running
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d/health", cfg.GatewayPort)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", healthURL, nil)
+	if err != nil {
+		result.Running = false
+		return result, nil
+	}
+
+	// Add auth header if token is available
+	if cfg.GatewayToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+cfg.GatewayToken)
+	}
+
+	httpClient := &http.Client{Timeout: 3 * time.Second}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		// Connection failed - gateway is not responding
+		result.Running = false
+		return result, nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		// Read response body to check for "status":"ok"
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		result.RawOutput = string(body)
+
+		// Try to parse JSON response
+		var healthResp struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(body, &healthResp) == nil {
+			result.Running = healthResp.Status == "ok"
+		} else {
+			// Fallback: any 200 response means gateway is responding
+			result.Running = true
+		}
+	} else {
+		result.Running = false
+	}
+
+	return result, nil
+}
+
+// regexpFindPID extracts PID from gateway status output.
+func regexpFindPID(s string) int {
+	patterns := []string{
+		`(?m)^[Pp][Ii][Dd][:\s]+(\d+)`,
+		`(?m)^[Pp]rocess[:\s]+(\d+)`,
+		`(?m)^\s*PID[:\s]+(\d+)`,
+		`(?m)^\s*pid[:\s]+(\d+)`,
+		`(?m)running.*?[Pp][Ii][Dd][:\s]+(\d+)`,
+		`(?m)with\s+[Pp][Ii][Dd][:\s]+(\d+)`,
+	}
+	for _, pattern := range patterns {
+		if re := regexp.MustCompile(pattern); re != nil {
+			if matches := re.FindStringSubmatch(s); len(matches) > 1 {
+				if pid, err := strconv.Atoi(matches[1]); err == nil && pid > 0 {
+					return pid
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// regexpFindVersion extracts version from gateway status output.
+func regexpFindVersion(s string) string {
+	patterns := []string{
+		`(?m)version[:\s]+v?([\d]+\.[\d]+\.[\d]+)`,
+		`(?m)v([\d]+\.[\d]+\.[\d]+)`,
+		`(?m)openclaw[:\s]+v?([\d]+\.[\d]+\.[\d]+)`,
+	}
+	for _, pattern := range patterns {
+		if re := regexp.MustCompile(pattern); re != nil {
+			if matches := re.FindStringSubmatch(s); len(matches) > 1 {
+				return matches[1]
+			}
+		}
+	}
+	return ""
+}
+
+// regexpFindToken extracts auth token from gateway status output.
+func regexpFindToken(s string) string {
+	patterns := []string{
+		`(?m)token[:\s]+([a-zA-Z0-9_-]+)`,
+		`(?m)auth[:\s]+([a-zA-Z0-9_-]+)`,
+	}
+	for _, pattern := range patterns {
+		if re := regexp.MustCompile(pattern); re != nil {
+			if matches := re.FindStringSubmatch(s); len(matches) > 1 {
+				return matches[1]
+			}
+		}
+	}
+	return ""
+}
+
 // PrepareCLICommand builds an *exec.Cmd for the bundled openclaw CLI with the same
 // environment and working directory as ExecCLI, without starting it.
 // Callers may attach StdoutPipe / Stderr and use Start + Wait for interactive flows
@@ -1798,6 +1994,62 @@ func (m *Manager) BundleStateDir() (string, error) {
 		return "", fmt.Errorf("resolve openclaw runtime: %w", err)
 	}
 	return bundle.StateDir, nil
+}
+
+// BundleLogsDir returns the logs directory for the bundled OpenClaw runtime.
+func (m *Manager) BundleLogsDir() (string, error) {
+	bundle, err := resolveBundledRuntime()
+	if err != nil {
+		return "", fmt.Errorf("resolve openclaw runtime: %w", err)
+	}
+	return bundle.LogsDir, nil
+}
+
+// GatewayLogPath returns the path to openclaw-gateway.log
+func (m *Manager) GatewayLogPath() (string, error) {
+	bundle, err := resolveBundledRuntime()
+	if err != nil {
+		return "", fmt.Errorf("resolve openclaw runtime: %w", err)
+	}
+	return filepath.Join(bundle.LogsDir, "openclaw-gateway.log"), nil
+}
+
+// ClearGatewayLog truncates the openclaw-gateway.log file to zero bytes.
+// This is called before starting the gateway so the log shows only the current session.
+func (m *Manager) ClearGatewayLog() error {
+	logPath, err := m.GatewayLogPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return fmt.Errorf("create logs dir: %w", err)
+	}
+	// Truncate to zero size
+	f, err := os.OpenFile(logPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open log for truncate: %w", err)
+	}
+	return f.Close()
+}
+
+// GatewayLogTail returns the last n lines of the openclaw-gateway.log file.
+func (m *Manager) GatewayLogTail(n int) (string, error) {
+	logPath, err := m.GatewayLogPath()
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read log: %w", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\r\n"), "\n")
+	if len(lines) <= n {
+		return string(data), nil
+	}
+	return strings.Join(lines[len(lines)-n:], "\n"), nil
 }
 
 // AddEventListener registers a listener for gateway events with the given key.
@@ -2692,12 +2944,12 @@ func (m *Manager) appendUpgradeOutput(line string) {
 }
 
 // appendStartStep appends a step entry to the startup output buffer.
-// The buffer is shared with upgrade output; it is cleared on the first start step
+// The buffer is shared with upgrade output; it is cleared on the first step
 // so that start and upgrade outputs do not mix. Broadcasts the updated output.
 func (m *Manager) appendStartStep(stepKey string, detail string) {
 	m.mu.Lock()
-	// Clear buffer on first step of a new start sequence.
-	if m.upgradeOutputBuf.Len() == 0 {
+	// Clear buffer on first step of a new start sequence (when buffer has old content).
+	if m.upgradeOutputBuf.Len() != 0 {
 		m.upgradeOutputBuf.Reset()
 	}
 	if detail != "" {
@@ -2713,15 +2965,15 @@ func (m *Manager) appendStartStep(stepKey string, detail string) {
 	if len(lines) > maxLines+1 {
 		m.upgradeOutputBuf.Reset()
 		m.upgradeOutputBuf.WriteString(strings.Join(lines[len(lines)-(maxLines+1):], "\n"))
+		content = m.upgradeOutputBuf.String()
 	}
-	bufLen := m.upgradeOutputBuf.Len()
 	m.mu.Unlock()
 
 	cfg := m.store.Get()
 	m.broadcastStatus(RuntimeStatus{
 		Phase:         PhaseStarting,
 		Message:       "Starting OpenClaw Gateway",
-		UpgradeOutput: content[:bufLen],
+		UpgradeOutput: content,
 		GatewayURL:    gatewayURL(cfg.GatewayPort),
 	})
 }

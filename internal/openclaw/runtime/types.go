@@ -68,3 +68,14 @@ type DoctorCommandResult struct {
 	Fixed      bool   `json:"fixed,omitempty"` // whether issues were fixed
 	WorkingDir string `json:"workingDir,omitempty"`
 }
+
+// GatewayStatusResult represents the parsed output of `openclaw gateway status` command.
+type GatewayStatusResult struct {
+	Running    bool   `json:"running"`
+	PID        int    `json:"pid"`
+	Version    string `json:"version,omitempty"`
+	Port       int    `json:"port"`
+	AuthToken  string `json:"authToken,omitempty"`
+	URL        string `json:"url,omitempty"`
+	RawOutput  string `json:"rawOutput,omitempty"`
+}
