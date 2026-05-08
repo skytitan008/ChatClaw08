@@ -76,6 +76,7 @@ wails3 task build:server
 wails3 task run:server
 ```
 
+
 ## 额外技能包
 将额外的技能skill打包成extraSkills.zip放到，build\extraSkills\extraSkills.zip，方便打包
 
@@ -120,4 +121,78 @@ wails3 task bundle:openclaw:runtime PLATFORM=multi  (wails3 task bundle:openclaw
 # 输出:
 # build/openclaw-runtime/linux-amd64.tar.gz
 # build/openclaw-runtime/linux-arm64.tar.gz
+```
+
+
+
+---
+
+## 自动化测试
+
+### 前端测试环境配置
+
+#### 1. 安装 pnpm
+
+```bash
+npm install -g pnpm
+```
+
+#### 2. 安装前端依赖和 Playwright
+
+```bash
+cd frontend
+pnpm install
+pnpm playwright install chromium
+```
+
+#### 3. 构建后端（WebView2 测试需要）
+
+```bash
+# 在项目根目录执行
+go build -o bin/ChatClaw.exe .
+```
+
+### 运行 E2E 测试
+
+> WebView2 模式直接测试真实应用，可验证 Go 后端与前端 Vue 的完整交互。
+
+```bash
+cd frontend
+pnpm playwright test --config playwright.webview2.config.ts
+```
+
+### 测试文件位置
+
+```
+chatclaw/
+├── internal/**/*_test.go          # 后端单元测试
+├── frontend/
+│   ├── tests/
+│   │   ├── e2e/                   # E2E 测试
+│   │   │   └── *.spec.ts
+│   │   └── setup/                 # 测试启动器
+│   │       ├── chatclaw-launcher.ts
+│   │       └── chatclaw-teardown.ts
+│   └── playwright.webview2.config.ts  # Playwright WebView2 配置
+```
+
+### 调试测试
+
+```bash
+# 带 UI 运行 Playwright
+cd frontend
+pnpm playwright test --config playwright.webview2.config.ts --headed
+
+# 调试模式（暂停在第一行）
+pnpm playwright test --config playwright.webview2.config.ts --debug
+```
+
+### 测试结果
+
+测试结果保存在 `frontend/test-results/` 目录下，失败时会自动截图。
+
+```bash
+# 查看测试报告
+cd frontend
+npx playwright show-report
 ```

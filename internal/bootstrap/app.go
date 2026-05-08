@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -199,6 +200,15 @@ func NewApp(opts Options) (app *application.App, cleanup func(), err error) {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
+		// Windows-specific: Enable WebView2 CDP debugging when WEBVIEW2_CDP_DEBUG=1
+		Windows: func() application.WindowsOptions {
+			opts := application.WindowsOptions{}
+			if runtime.GOOS == "windows" && os.Getenv("WEBVIEW2_CDP_DEBUG") == "1" {
+				opts.EnabledFeatures = []string{"msWebView2EnableDebugging"}
+				opts.AdditionalBrowserArgs = []string{"--remote-debugging-port=9222"}
+			}
+			return opts
+		}(),
 		// 单实例配置：防止多个应用实例同时运行
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: define.SingleInstanceUniqueID,
