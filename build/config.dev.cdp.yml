@@ -35,6 +35,10 @@ dev_mode:
       type: blocking
       env:
         WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9222"
+    - cmd: "wails3 task common:dev:frontend"
+      type: background
+      env:
+        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--remote-debugging-port=9222"
     - cmd: "wails3 task run"
       type: primary
       env:

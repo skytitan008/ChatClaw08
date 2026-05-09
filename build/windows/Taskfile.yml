@@ -182,6 +182,15 @@ tasks:
     cmds:
       - '{{.BIN_DIR}}/{{.APP_NAME}}.exe'
 
+  dev:cdp:
+    summary: Runs app in dev mode with WebView2 CDP debugging enabled
+    desc: |
+      Runs the application in development mode with CDP debugging enabled.
+      This sets WEBVIEW2_CDP_DEBUG=1 to enable WebView2 debugging on port 9222.
+      Useful for Playwright E2E testing via CDP.
+    cmds:
+      - $env:WEBVIEW2_CDP_DEBUG = "1"; wails3 dev
+
   sign:
     summary: Signs the Windows executable
     desc: |

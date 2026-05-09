@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useColorMode } from '@vueuse/core'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { RefreshCw, Loader2, ExternalLink, Download, Square, ChevronDown, ChevronUp } from 'lucide-vue-next'
+import AnsiToHtml from 'ansi-to-html'
 import * as OpenClawRuntimeService from '@bindings/chatclaw/internal/openclaw/runtime/openclawruntimeservice'
 import {
   useNavigationStore,
@@ -53,8 +55,53 @@ const upgradeOutputEl = ref<HTMLDivElement | null>(null)
 // Gateway 日志相关
 const showGatewayLog = ref(false)
 const gatewayLogEl = ref<HTMLDivElement | null>(null)
-const gatewayLogLines = ref<string[]>([])
+const gatewayLogHtml = ref('')
 let gatewayLogPollInterval: ReturnType<typeof setInterval> | null = null
+const colorMode = useColorMode()
+
+/** Build ansi-to-html converter with theme-aware colors (mirrors OpenClawDoctorConsole). */
+function buildAnsiConverter(dark: boolean) {
+  return new AnsiToHtml({
+    fg: dark ? '#e2e8f0' : '#1e293b',
+    bg: dark ? '#0f172a' : '#f8fafc',
+    newline: true,
+    escapeXML: true,
+    colors: {
+      0: dark ? '#6b7280' : '#6b7280',
+      1: dark ? '#f87171' : '#dc2626',
+      2: dark ? '#4ade80' : '#16a34a',
+      3: dark ? '#facc15' : '#ca8a04',
+      4: dark ? '#60a5fa' : '#2563eb',
+      5: dark ? '#e879f9' : '#c026d3',
+      6: dark ? '#22d3ee' : '#0891b2',
+      7: dark ? '#f1f5f9' : '#1e293b',
+      30: dark ? '#64748b' : '#374151',
+      31: dark ? '#f87171' : '#dc2626',
+      32: dark ? '#4ade80' : '#16a34a',
+      33: dark ? '#facc15' : '#ca8a04',
+      34: dark ? '#60a5fa' : '#2563eb',
+      35: dark ? '#e879f9' : '#c026d3',
+      36: dark ? '#22d3ee' : '#0891b2',
+      37: dark ? '#f1f5f9' : '#1e293b',
+      90: dark ? '#6b7280' : '#9ca3af',
+      91: dark ? '#fca5a5' : '#ef4444',
+      92: dark ? '#86efac' : '#22c55e',
+      93: dark ? '#fde047' : '#eab308',
+      94: dark ? '#93c5fd' : '#3b82f6',
+      95: dark ? '#f5d0fe' : '#d946ef',
+      96: dark ? '#67e8f9' : '#06b6d4',
+      97: dark ? '#ffffff' : '#f8fafc',
+    },
+  })
+}
+
+/** Convert raw gateway log text to ANSI-colored HTML. */
+function ansiToHtml(raw: string, dark: boolean): string {
+  if (!raw) return ''
+  const converter = buildAnsiConverter(dark)
+  // Join lines with line breaks so the gateway log renders as a vertical list.
+  return converter.toHtml(raw.split('\n').join('\n'))
+}
 
 // 检查用户是否滚动到了日志底部（底部 50px 范围内）
 const isAtLogBottom = () => {
@@ -67,22 +114,19 @@ const isAtLogBottom = () => {
 // Gateway 日志轮询（启动期间实时读取日志尾部）
 const startGatewayLogPolling = async () => {
   stopGatewayLogPolling()
-  gatewayLogLines.value = []
+  gatewayLogHtml.value = ''
   // 启动时显示日志区域，等待内容
   showGatewayLog.value = true
 
   const poll = async () => {
     try {
       const log = await OpenClawRuntimeService.GatewayLogTail(200)
-      if (log) {
-        const lines = log.split('\n').filter((l) => l.trim() !== '')
-        if (lines.length > 0) {
-          gatewayLogLines.value = lines
-          await nextTick()
-          // 只有用户在底部时才自动滚动
-          if (gatewayLogEl.value && isAtLogBottom()) {
-            gatewayLogEl.value.scrollTop = gatewayLogEl.value.scrollHeight
-          }
+      if (log && log.trim()) {
+        gatewayLogHtml.value = ansiToHtml(log, colorMode.value === 'dark')
+        await nextTick()
+        // 只有用户在底部时才自动滚动
+        if (gatewayLogEl.value && isAtLogBottom()) {
+          gatewayLogEl.value.scrollTop = gatewayLogEl.value.scrollHeight
         }
       }
     } catch {
@@ -109,15 +153,12 @@ const handleShowGatewayLog = async () => {
   const poll = async () => {
     try {
       const log = await OpenClawRuntimeService.GatewayLogTail(200)
-      if (log) {
-        const lines = log.split('\n').filter((l) => l.trim() !== '')
-        if (lines.length > 0) {
-          gatewayLogLines.value = lines
-          await nextTick()
-          // 只有用户在底部时才自动滚动
-          if (gatewayLogEl.value && isAtLogBottom()) {
-            gatewayLogEl.value.scrollTop = gatewayLogEl.value.scrollHeight
-          }
+      if (log && log.trim()) {
+        gatewayLogHtml.value = ansiToHtml(log, colorMode.value === 'dark')
+        await nextTick()
+        // 只有用户在底部时才自动滚动
+        if (gatewayLogEl.value && isAtLogBottom()) {
+          gatewayLogEl.value.scrollTop = gatewayLogEl.value.scrollHeight
         }
       }
     } catch {
@@ -288,7 +329,7 @@ const handleRestart = async () => {
   try {
     // 清空旧日志
     await OpenClawRuntimeService.ClearGatewayLog()
-    gatewayLogLines.value = []
+    gatewayLogHtml.value = ''
 
     status.value = await OpenClawRuntimeService.RestartGateway()
     gatewayState.value = await OpenClawRuntimeService.GetGatewayState()
@@ -315,7 +356,7 @@ const handleStart = async () => {
   try {
     // 清空旧日志
     await OpenClawRuntimeService.ClearGatewayLog()
-    gatewayLogLines.value = []
+    gatewayLogHtml.value = ''
 
     status.value = await OpenClawRuntimeService.StartGateway()
     syncGatewayStore()
@@ -684,21 +725,19 @@ onUnmounted(() => {
             class="max-h-60 overflow-y-auto px-4 pb-3"
           >
             <div
-              class="rounded border border-border bg-muted/50 px-3 py-2 font-mono text-xs text-muted-foreground dark:border-white/10"
+              class="rounded border border-border bg-muted/50 px-3 py-2 text-xs dark:border-white/10"
             >
               <div
-                v-if="gatewayLogLines.length === 0"
+                v-if="!gatewayLogHtml"
                 class="italic text-muted-foreground/50"
               >
                 {{ t('settings.openclawRuntime.waitingForLog') }}
               </div>
               <div
-                v-for="(line, idx) in gatewayLogLines"
-                :key="idx"
-                class="leading-5"
-              >
-                {{ line }}
-              </div>
+                v-if="gatewayLogHtml"
+                class="font-mono leading-5 whitespace-pre-wrap"
+                v-html="gatewayLogHtml"
+              />
             </div>
           </div>
         </div>

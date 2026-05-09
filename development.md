@@ -2,11 +2,22 @@
 
 ## 前置依赖
 
-### npm
+### Node.js
 
+```bash
+# 使用 nvm 安装 Node.js 22.22（与 Cursor AI 保持一致）
+nvm install 22.22
+nvm use 22.22
 ```
-nvm install --lts
+
+### pnpm
+
+```bash
+# 安装 pnpm（项目统一使用 pnpm 作为包管理器）
+npm install -g pnpm
 ```
+
+> 注意：项目所有前端依赖管理均使用 pnpm，Taskfile 中也配置为使用 pnpm。
 
 ### Wails3 cli
 
@@ -71,6 +82,9 @@ go run ./internal/tools/openclawbundle -config build/runtime.yml
 # gui模式
 wails3 dev
 
+# gui模式 + CDP调试（用于Playwright E2E测试）
+wails3 dev -config build/config.dev.cdp.yml
+
 # server模式 (only linux)
 wails3 task build:server
 wails3 task run:server
@@ -111,7 +125,7 @@ cd bin && mv ChatClaw-universal.dmg ./ChatClaw_MacOS_universal.dmg && cd ..
 
 ```bash
 docker login registry.cn-hangzhou.aliyuncs.com
-wails3 generate bindings -clean -ts && cd frontend && npm i && npm run build && cd ..
+wails3 generate bindings -clean -ts && cd frontend && pnpm install && pnpm run build && cd ..
 wails3 task build:docker PLATFORM=multi  (wails3 task build:docker PLATFORM=amd64)
 mv ./bin/linux_amd64/server ./bin/ChatClaw_server_linux_amd64
 mv ./bin/linux_arm64/server ./bin/ChatClaw_server_linux_arm64
@@ -131,21 +145,16 @@ wails3 task bundle:openclaw:runtime PLATFORM=multi  (wails3 task bundle:openclaw
 
 ### 前端测试环境配置
 
-#### 1. 安装 pnpm
-
-```bash
-npm install -g pnpm
-```
-
-#### 2. 安装前端依赖和 Playwright
+#### 1. 安装前端依赖
 
 ```bash
 cd frontend
 pnpm install
-pnpm playwright install chromium
 ```
 
-#### 3. 构建后端（WebView2 测试需要）
+> 注意：WebView2 模式无需下载 chromium，Playwright 通过 CDP 连接到已运行的 WebView2。
+
+#### 2. 构建后端（WebView2 测试需要）
 
 ```bash
 # 在项目根目录执行
@@ -158,7 +167,7 @@ go build -o bin/ChatClaw.exe .
 
 ```bash
 cd frontend
-pnpm playwright test --config playwright.webview2.config.ts
+pnpm test
 ```
 
 ### 测试文件位置
@@ -181,10 +190,10 @@ chatclaw/
 ```bash
 # 带 UI 运行 Playwright
 cd frontend
-pnpm playwright test --config playwright.webview2.config.ts --headed
+pnpm test:e2e:headed
 
 # 调试模式（暂停在第一行）
-pnpm playwright test --config playwright.webview2.config.ts --debug
+pnpm test:e2e:debug
 ```
 
 ### 测试结果

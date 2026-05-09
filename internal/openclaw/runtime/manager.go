@@ -1862,16 +1862,17 @@ func (m *Manager) GetGatewayStatusViaCLI(ctx context.Context) (*GatewayStatusRes
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
-		// Read response body to check for "status":"ok"
+		// Read response body to check for "ok":true (OpenClaw returns {"ok":true,"status":"live"})
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		result.RawOutput = string(body)
 
-		// Try to parse JSON response
+		// Parse JSON - OpenClaw returns {"ok":true,"status":"live"}
 		var healthResp struct {
+			Ok     bool   `json:"ok"`
 			Status string `json:"status"`
 		}
 		if json.Unmarshal(body, &healthResp) == nil {
-			result.Running = healthResp.Status == "ok"
+			result.Running = healthResp.Ok
 		} else {
 			// Fallback: any 200 response means gateway is responding
 			result.Running = true
@@ -2371,8 +2372,8 @@ func ensureOpenClawDefaultConfig(configPath string, defaultPort int, gatewayToke
 			"port": defaultPort,
 			"mode": "local",
 			"auth": map[string]any{
-				"mode":   "token",
-				"token":  gatewayToken,
+				"mode":  "token",
+				"token": gatewayToken,
 			},
 		},
 	}
