@@ -1048,7 +1048,7 @@ func (s *OpenClawChannelService) ensureWhatsappChannelEnabled(accountID string) 
 
 	// TEMP: Clear whatsapp channel config to prevent gateway startup errors.
 	// TODO: Remove this block after WhatsApp config schema is finalized.
-	s.clearWhatsappChannelConfigForStartup()
+	//s.clearWhatsappChannelConfigForStartup()
 
 	return true, nil
 }
