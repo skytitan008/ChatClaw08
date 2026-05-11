@@ -239,6 +239,12 @@ func LookupActiveRuntime() (*ActiveRuntimeSummary, error) {
 	}, nil
 }
 
+// ResolveBundledRuntime resolves the active OpenClaw runtime bundle and returns the full bundle info.
+// Returns nil if no valid bundle exists.
+func ResolveBundledRuntime() (*bundledRuntime, error) {
+	return resolveBundledRuntime()
+}
+
 // BundledSkillsDir returns the skills directory shipped inside the bundled OpenClaw npm package
 // (node_modules/openclaw/skills), if present. Matches OpenClaw docs: bundled install skills.
 func BundledSkillsDir() (string, error) {

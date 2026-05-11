@@ -162,6 +162,7 @@ export default {
     assistant: 'Task Assistant',
     openclaw: 'OpenClaw',
     openclawDashboard: 'OpenClaw Dashboard',
+    openclawTerminal: 'Terminal',
     knowledge: 'Knowledge Base',
     scheduledTasks: 'Scheduled Tasks',
     skills: 'Skills',
@@ -294,6 +295,9 @@ export default {
       starting: 'Starting...',
       startSuccess: 'Gateway started',
       startFailed: 'Gateway failed to start',
+      gatewayLog: 'Gateway Log',
+      waitingForLog: 'Waiting for log output...',
+      viewGatewayLog: 'View Log',
       startSteps: {
         resolvedRuntime: 'Located runtime: {path}',
         hotfixApplied: 'Applied {count} hotfix file(s)',
@@ -374,11 +378,17 @@ export default {
         failed: 'Finished with errors',
         fixed: 'Fixed',
       },
-      autoStartTooltip: '点击开启或关闭 OpenClaw 网关自动启动，开启后应用启动时将自动启动网关',
+      resetToFactory: 'Factory Reset',
+      resetToFactoryHint: 'Delete OpenClaw data directory and restart the app. Use this to restore factory settings when the environment is broken.',
+      resetConfirmTitle: 'Confirm Factory Reset',
+      resetConfirmDesc:
+        'This will delete all OpenClaw data storage folders, including plugins, conversation history, channel configurations, and more. This action cannot be undone. Continue?',
+      resetFailed: 'Factory reset failed',
+      autoStartTooltip: 'Toggle OpenClaw gateway auto-start. When enabled, the gateway will start automatically when the app launches.',
       continueOrRestartDesc:
-        '发现 {version} 版本的下载缓存，请选择继续升级（从 npm install 开始）或重新下载。',
-      portOccupiedHint: '端口 {port} 被进程 {process} (PID: {pid}) 占用，请先停止该进程后再试。',
-      portStillOccupiedAfterStopHint: '请手动终止占用端口的进程 (PID: {pid})。',
+        'Download cache for version {version} was found. Choose to continue the upgrade (starting from npm install) or download again.',
+      portOccupiedHint: 'Port {port} is occupied by process {process} (PID: {pid}). Stop that process first.',
+      portStillOccupiedAfterStopHint: 'Manually terminate the process occupying the port (PID: {pid}).',
     },
     runtimeEnvironment: {
       title: 'Runtime Environment Setup',
@@ -2221,6 +2231,10 @@ export default {
       notInstalled:
         'OpenClaw runtime not detected. Go to Settings → General or OpenClaw Manager to install the runtime.',
     },
+  },
+  openclawTerminal: {
+    tools: 'Tools',
+    loading: 'Loading...',
   },
   openclawCron: {
     title: 'Scheduled Tasks',

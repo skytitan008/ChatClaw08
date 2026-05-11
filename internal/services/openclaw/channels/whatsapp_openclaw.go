@@ -1045,7 +1045,45 @@ func (s *OpenClawChannelService) ensureWhatsappChannelEnabled(accountID string) 
 		"enabled", true,
 		"selfChatMode", true,
 		"config", configPath)
+
+	// TEMP: Clear whatsapp channel config to prevent gateway startup errors.
+	// TODO: Remove this block after WhatsApp config schema is finalized.
+	//s.clearWhatsappChannelConfigForStartup()
+
 	return true, nil
+}
+
+// clearWhatsappChannelConfigForStartup removes channels.whatsapp from openclaw.json
+// to prevent gateway from failing to start due to incomplete/whatsapp config validation.
+// This is a temporary workaround until the WhatsApp channel config schema is finalized.
+// TODO: Remove this function after WhatsApp config is properly implemented.
+func (s *OpenClawChannelService) clearWhatsappChannelConfigForStartup() {
+	cfg, configPath, err := loadOpenClawJSONConfig()
+	if err != nil {
+		s.app.Logger.Warn("openclaw: failed to load config for whatsapp cleanup",
+			"error", err)
+		return
+	}
+	channelsCfg, ok := cfg["channels"].(map[string]any)
+	if !ok {
+		return
+	}
+	if _, exists := channelsCfg[openClawWhatsappChannelID]; !exists {
+		return
+	}
+	delete(channelsCfg, openClawWhatsappChannelID)
+	if len(channelsCfg) == 0 {
+		delete(cfg, "channels")
+	} else {
+		cfg["channels"] = channelsCfg
+	}
+	if err := saveOpenClawJSONConfig(configPath, cfg); err != nil {
+		s.app.Logger.Warn("openclaw: failed to save config after whatsapp cleanup",
+			"error", err)
+		return
+	}
+	s.app.Logger.Info("openclaw: cleared whatsapp channel config to prevent startup errors",
+		"config", configPath)
 }
 
 // PrepareWhatsappChannel ensures the bundled WhatsApp channel is enabled before QR login starts.

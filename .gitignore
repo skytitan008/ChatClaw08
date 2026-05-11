@@ -2,6 +2,9 @@
 bin
 frontend/dist
 frontend/node_modules
+frontend/test-results/*
+frontend/.npmrc
+frontend/package-lock.json
 build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
 build/windows/bin/*
@@ -15,3 +18,4 @@ build/openclaw-runtime/
 .cursor/settings.json
 .gocache/
 .cursor/archive/*
+*.log

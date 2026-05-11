@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useColorMode } from '@vueuse/core'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { RefreshCw, Loader2, ExternalLink, Download, Square, ChevronDown, ChevronUp } from 'lucide-vue-next'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { RefreshCw, Loader2, ExternalLink, Download, Square, ChevronDown, ChevronUp, RotateCcw } from 'lucide-vue-next'
+import AnsiToHtml from 'ansi-to-html'
 import * as OpenClawRuntimeService from '@bindings/chatclaw/internal/openclaw/runtime/openclawruntimeservice'
 import {
   useNavigationStore,
@@ -41,6 +44,10 @@ const gatewayState = ref<GatewayConnectionState>(new GatewayConnectionState())
 const restarting = ref(false)
 const stopping = ref(false)
 const upgrading = ref(false)
+const resetting = ref(false)
+const resetConfirmOpen = ref(false)
+const resetElapsed = ref(0)
+let resetTimer: ReturnType<typeof setInterval> | null = null
 
 // 后端事件取消订阅函数
 let unsubscribeStatus: (() => void) | undefined
@@ -49,6 +56,124 @@ let unsubscribeGatewayState: (() => void) | undefined
 // 升级详情相关
 const showUpgradeDetails = ref(false)
 const upgradeOutputEl = ref<HTMLDivElement | null>(null)
+
+// Gateway 日志相关
+const showGatewayLog = ref(false)
+const gatewayLogEl = ref<HTMLDivElement | null>(null)
+const gatewayLogHtml = ref('')
+let gatewayLogPollInterval: ReturnType<typeof setInterval> | null = null
+const colorMode = useColorMode()
+
+/** Build ansi-to-html converter with theme-aware colors (mirrors OpenClawDoctorConsole). */
+function buildAnsiConverter(dark: boolean) {
+  return new AnsiToHtml({
+    fg: dark ? '#e2e8f0' : '#1e293b',
+    bg: dark ? '#0f172a' : '#f8fafc',
+    newline: true,
+    escapeXML: true,
+    colors: {
+      0: dark ? '#6b7280' : '#6b7280',
+      1: dark ? '#f87171' : '#dc2626',
+      2: dark ? '#4ade80' : '#16a34a',
+      3: dark ? '#facc15' : '#ca8a04',
+      4: dark ? '#60a5fa' : '#2563eb',
+      5: dark ? '#e879f9' : '#c026d3',
+      6: dark ? '#22d3ee' : '#0891b2',
+      7: dark ? '#f1f5f9' : '#1e293b',
+      30: dark ? '#64748b' : '#374151',
+      31: dark ? '#f87171' : '#dc2626',
+      32: dark ? '#4ade80' : '#16a34a',
+      33: dark ? '#facc15' : '#ca8a04',
+      34: dark ? '#60a5fa' : '#2563eb',
+      35: dark ? '#e879f9' : '#c026d3',
+      36: dark ? '#22d3ee' : '#0891b2',
+      37: dark ? '#f1f5f9' : '#1e293b',
+      90: dark ? '#6b7280' : '#9ca3af',
+      91: dark ? '#fca5a5' : '#ef4444',
+      92: dark ? '#86efac' : '#22c55e',
+      93: dark ? '#fde047' : '#eab308',
+      94: dark ? '#93c5fd' : '#3b82f6',
+      95: dark ? '#f5d0fe' : '#d946ef',
+      96: dark ? '#67e8f9' : '#06b6d4',
+      97: dark ? '#ffffff' : '#f8fafc',
+    },
+  })
+}
+
+/** Convert raw gateway log text to ANSI-colored HTML. */
+function ansiToHtml(raw: string, dark: boolean): string {
+  if (!raw) return ''
+  const converter = buildAnsiConverter(dark)
+  // Join lines with line breaks so the gateway log renders as a vertical list.
+  return converter.toHtml(raw.split('\n').join('\n'))
+}
+
+// 检查用户是否滚动到了日志底部（底部 50px 范围内）
+const isAtLogBottom = () => {
+  if (!gatewayLogEl.value) return true
+  const el = gatewayLogEl.value
+  const threshold = 50
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+}
+
+// Gateway 日志轮询（启动期间实时读取日志尾部）
+const startGatewayLogPolling = async () => {
+  stopGatewayLogPolling()
+  gatewayLogHtml.value = ''
+  // 启动时显示日志区域，等待内容
+  showGatewayLog.value = true
+
+  const poll = async () => {
+    try {
+      const log = await OpenClawRuntimeService.GatewayLogTail(200)
+      if (log && log.trim()) {
+        gatewayLogHtml.value = ansiToHtml(log, colorMode.value === 'dark')
+        await nextTick()
+        // 只有用户在底部时才自动滚动
+        if (gatewayLogEl.value && isAtLogBottom()) {
+          gatewayLogEl.value.scrollTop = gatewayLogEl.value.scrollHeight
+        }
+      }
+    } catch {
+      // ignore errors during polling
+    }
+  }
+
+  await poll()
+  gatewayLogPollInterval = setInterval(poll, 1000)
+}
+
+const stopGatewayLogPolling = () => {
+  if (gatewayLogPollInterval) {
+    clearInterval(gatewayLogPollInterval)
+    gatewayLogPollInterval = null
+  }
+}
+
+// 手动查看网关日志
+const handleShowGatewayLog = async () => {
+  showGatewayLog.value = true
+  stopGatewayLogPolling()
+
+  const poll = async () => {
+    try {
+      const log = await OpenClawRuntimeService.GatewayLogTail(200)
+      if (log && log.trim()) {
+        gatewayLogHtml.value = ansiToHtml(log, colorMode.value === 'dark')
+        await nextTick()
+        // 只有用户在底部时才自动滚动
+        if (gatewayLogEl.value && isAtLogBottom()) {
+          gatewayLogEl.value.scrollTop = gatewayLogEl.value.scrollHeight
+        }
+      }
+    } catch {
+      // ignore errors
+    }
+  }
+
+  await poll()
+  gatewayLogPollInterval = setInterval(poll, 2000)
+}
 
 // 自动启动开关
 const autoStart = ref(true)
@@ -69,7 +194,11 @@ const isUpgrading = computed(() => status.value.phase === 'upgrading')
 const gatewayConnectionLabel = computed(() => {
   if (gatewayState.value.authenticated) return t('settings.openclawRuntime.gateway.authenticated')
   if (gatewayState.value.connected) return t('settings.openclawRuntime.gateway.connected')
-  if (gatewayState.value.reconnecting) return t('settings.openclawRuntime.gateway.reconnecting')
+  if (gatewayState.value.reconnecting) {
+    const err = gatewayState.value.lastError
+    if (err) return `${t('settings.openclawRuntime.gateway.reconnecting')} - ${err}`
+    return t('settings.openclawRuntime.gateway.reconnecting')
+  }
   return t('settings.openclawRuntime.gateway.disconnected')
 })
 
@@ -120,18 +249,29 @@ const startStepLines = computed(() => {
   return out.split('\n').filter((l) => l.trim() !== '')
 })
 
-// 启动步骤面板：启动中（starting）显示，"已连接"（connected）步骤出现后保留至网关达到 running 状态后隐藏。
-// 这样"已连接"步骤的绿色勾号能在网关达到 connected 状态时完整显示一次。
+// 启动步骤面板：启动中（starting）或失败停止（stop，有步骤）时显示。
+// running 之后清空步骤缓存。
 const isStartInProgress = computed(() => {
   const lines = startStepLines.value
-  if (lines.length === 0) return false
   const status = gatewayStore.visualStatus
+
   // running 之后立即隐藏，同时清空步骤缓存。
   if (status === GatewayVisualStatus.Running) {
     gatewayStore.upgradeOutput = ''
     return false
   }
-  return status === GatewayVisualStatus.Starting
+
+  // 启动中显示步骤
+  if (status === GatewayVisualStatus.Starting) {
+    return true
+  }
+
+  // 停止状态：如果有步骤（说明是启动失败），也显示步骤
+  if (status === GatewayVisualStatus.Stop && lines.length > 0) {
+    return true
+  }
+
+  return false
 })
 
 const badgeText = computed(() => {
@@ -192,10 +332,16 @@ const handleAutoStartChange = async (checked: boolean | 'indeterminate') => {
 const handleRestart = async () => {
   restarting.value = true
   try {
+    // 清空旧日志
+    await OpenClawRuntimeService.ClearGatewayLog()
+    gatewayLogHtml.value = ''
+
     status.value = await OpenClawRuntimeService.RestartGateway()
     gatewayState.value = await OpenClawRuntimeService.GetGatewayState()
     syncGatewayStore()
-    // 状态变化会通过后端 broadcast 推送，前端通过事件订阅实时感知
+
+    // 开始实时读取日志
+    startGatewayLogPolling()
 
     if (status.value.phase === 'error') {
       toast.error(status.value.message || t('settings.openclawRuntime.restartFailed'))
@@ -213,13 +359,19 @@ const handleRestart = async () => {
 const handleStart = async () => {
   restarting.value = true
   try {
+    // 清空旧日志
+    await OpenClawRuntimeService.ClearGatewayLog()
+    gatewayLogHtml.value = ''
+
     status.value = await OpenClawRuntimeService.StartGateway()
     syncGatewayStore()
+
+    // 开始实时读取日志
+    startGatewayLogPolling()
 
     if (status.value.phase === 'error') {
       toast.error(status.value.message || t('settings.openclawRuntime.startFailed'))
     } else if (status.value.phase === 'not_installed') {
-      // Backend succeeds with phase=not_installed; show a visible hint so the click does not feel dead.
       toast.default(t('openclawGateway.banner.notInstalled'), TOAST_DURATION_HINT)
     } else {
       toast.success(t('settings.openclawRuntime.startSuccess'))
@@ -354,6 +506,43 @@ const handleOpenDashboard = () => {
   navigationStore.navigateToModule('openclaw-dashboard')
 }
 
+// 重置到出厂设置
+const handleResetToFactory = async () => {
+  resetConfirmOpen.value = false
+  resetting.value = true
+  resetElapsed.value = 0
+
+  // 启动计时器
+  resetTimer = setInterval(() => {
+    resetElapsed.value++
+  }, 1000)
+
+  try {
+    await OpenClawRuntimeService.ResetToFactory()
+  } catch (e) {
+    console.error('Failed to reset OpenClaw to factory:', e)
+    toast.error(getErrorMessage(e) || t('settings.openclawRuntime.resetFailed'))
+    resetting.value = false
+    if (resetTimer) {
+      clearInterval(resetTimer)
+      resetTimer = null
+    }
+  }
+}
+
+const cancelReset = () => {
+  resetConfirmOpen.value = false
+}
+
+// 格式化重置耗时显示
+const resetElapsedDisplay = computed(() => {
+  const s = resetElapsed.value
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const sec = s % 60
+  return `${m}m ${sec}s`
+})
+
 // 升级输出自动滚动
 watch(
   () => gatewayStore.upgradeOutput,
@@ -375,6 +564,14 @@ watch(
     // 升级开始时自动展开详情
     if (phase === 'upgrading') {
       showUpgradeDetails.value = true
+    }
+    // 连接成功后停止日志轮询
+    if (phase === 'connected') {
+      stopGatewayLogPolling()
+    }
+    // 错误时也停止轮询
+    if (phase === 'error') {
+      stopGatewayLogPolling()
     }
   }
 )
@@ -545,6 +742,48 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- Gateway 日志（启动中实时显示） -->
+        <div
+          v-if="showGatewayLog"
+          class="border-b border-border dark:border-white/10"
+        >
+          <div
+            class="flex items-center justify-between px-4 pt-3"
+          >
+            <span class="text-xs font-medium text-foreground">
+              {{ t('settings.openclawRuntime.gatewayLog') }}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              class="h-5 text-xs"
+              @click="showGatewayLog = false"
+            >
+              <ChevronUp class="size-3" />
+            </Button>
+          </div>
+          <div
+            ref="gatewayLogEl"
+            class="max-h-60 overflow-y-auto px-4 pb-3"
+          >
+            <div
+              class="rounded border border-border bg-muted/50 px-3 py-2 text-xs dark:border-white/10"
+            >
+              <div
+                v-if="!gatewayLogHtml"
+                class="italic text-muted-foreground/50"
+              >
+                {{ t('settings.openclawRuntime.waitingForLog') }}
+              </div>
+              <div
+                v-if="gatewayLogHtml"
+                class="font-mono leading-5 whitespace-pre-wrap"
+                v-html="gatewayLogHtml"
+              />
+            </div>
+          </div>
+        </div>
+
         <!-- Gateway connection -->
         <div
           class="flex items-center justify-between border-b border-border p-4 dark:border-white/10"
@@ -552,7 +791,23 @@ onUnmounted(() => {
           <span class="shrink-0 text-sm text-foreground">
             {{ t('settings.openclawRuntime.gatewayConnection') }}
           </span>
-          <span class="text-sm text-muted-foreground">{{ gatewayConnectionLabel }}</span>
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-muted-foreground">{{ gatewayConnectionLabel }}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              class="h-6 text-xs"
+              @click="handleShowGatewayLog"
+            >
+              <svg class="mr-1 size-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+              </svg>
+              {{ t('settings.openclawRuntime.viewGatewayLog') }}
+            </Button>
+          </div>
         </div>
 
         <!-- Auto-start setting -->
@@ -736,6 +991,30 @@ onUnmounted(() => {
             {{ t('settings.openclawRuntime.openDashboard') }}
           </Button>
         </div>
+
+        <!-- 重置到出厂设置按钮 -->
+        <div
+          class="flex items-center justify-between border-t border-border p-4 dark:border-white/10"
+        >
+          <div class="flex min-w-0 flex-1 flex-col gap-0.5 pr-4">
+            <span class="shrink-0 text-sm font-medium text-foreground">
+              {{ t('settings.openclawRuntime.resetToFactory') }}
+            </span>
+            <span class="shrink-0 text-xs text-muted-foreground">
+              {{ t('settings.openclawRuntime.resetToFactoryHint') }}
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            :disabled="!isGatewayStopped || resetting"
+            @click="resetConfirmOpen = true"
+          >
+            <Loader2 v-if="resetting" class="mr-1.5 size-3.5 animate-spin" />
+            <RotateCcw v-else class="mr-1.5 size-3.5" />
+            {{ resetting ? resetElapsedDisplay : t('settings.openclawRuntime.resetToFactory') }}
+          </Button>
+        </div>
       </SettingsCard>
 
       <!-- 继续/重新升级弹窗 -->
@@ -779,6 +1058,24 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+
+      <!-- 重置到出厂设置确认弹窗 -->
+      <AlertDialog :open="resetConfirmOpen" @update:open="(v) => !v && cancelReset()">
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{{ t('settings.openclawRuntime.resetConfirmTitle') }}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {{ t('settings.openclawRuntime.resetConfirmDesc') }}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{{ t('common.cancel') }}</AlertDialogCancel>
+            <AlertDialogAction @click="handleResetToFactory">
+              {{ t('common.confirm') }}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <OpenClawDoctorConsole />
     </div>

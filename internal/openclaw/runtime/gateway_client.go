@@ -23,8 +23,13 @@ const (
 	clientRole      = "operator"
 	deviceFamily    = "desktop"
 
-	pingInterval = 20 * time.Second
-	pongWait     = 40 * time.Second
+	pingInterval = 30 * time.Second
+	pongWait     = 60 * time.Second
+
+	// Connection timeouts
+	handshakeTimeout = 30 * time.Second
+	connectTimeout   = 30 * time.Second
+	readDeadline     = 30 * time.Second
 )
 
 type gatewayClientOptions struct {
@@ -105,7 +110,7 @@ func NewGatewayClient(opts gatewayClientOptions) *GatewayClient {
 
 func (c *GatewayClient) Connect(ctx context.Context) (*GatewayHelloOK, error) {
 	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
+		HandshakeTimeout: handshakeTimeout,
 		Proxy:            http.ProxyFromEnvironment,
 	}
 
@@ -119,7 +124,7 @@ func (c *GatewayClient) Connect(ctx context.Context) (*GatewayHelloOK, error) {
 		return nil, fmt.Errorf("dial gateway websocket: %w", err)
 	}
 
-	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(readDeadline)); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -354,7 +359,7 @@ func (c *GatewayClient) writeFrame(frame gatewayRequestFrame) error {
 	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(readDeadline))
 	err := conn.WriteJSON(frame)
 	_ = conn.SetWriteDeadline(time.Time{})
 	if err != nil {
@@ -370,7 +375,7 @@ func (c *GatewayClient) pingLoop(conn *websocket.Conn, stop chan struct{}) {
 		select {
 		case <-ticker.C:
 			c.sendMu.Lock()
-			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
+			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(readDeadline))
 			c.sendMu.Unlock()
 			if err != nil {
 				return

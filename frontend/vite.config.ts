@@ -23,6 +23,7 @@ export default defineConfig({
         selection: "selection.html",
         historyRun: "history-run.html",
       },
+      external: [/\/src\/test\//, /\/tests\//],
       output: {
         manualChunks(id) {
           if (id.includes("node_modules")) {

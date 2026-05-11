@@ -12,14 +12,14 @@ tasks:
     dir: frontend
     sources:
       - package.json
-      - package-lock.json
+      - pnpm-lock.yaml
     generates:
       - node_modules
     preconditions:
-      - sh: npm version
-        msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
+      - sh: pnpm --version
+        msg: "Looks like pnpm isn't installed. Install it with: npm install -g pnpm"
     cmds:
-      - npm install
+      - pnpm install
 
   build:frontend:
     label: build:frontend (DEV={{.DEV}})
@@ -36,7 +36,7 @@ tasks:
           BUILD_FLAGS:
             ref: .BUILD_FLAGS
     cmds:
-      - npm run {{.BUILD_COMMAND}} -q
+      - pnpm --silent run {{.BUILD_COMMAND}}
     env:
       PRODUCTION: '{{if eq .DEV "true"}}false{{else}}true{{end}}'
     vars:
@@ -115,7 +115,7 @@ tasks:
     deps:
       - task: install:frontend:deps
     cmds:
-      - npm run dev -- --port {{.VITE_PORT}} --strictPort
+      - pnpm run dev --port {{.VITE_PORT}} --strictPort
 
   update:build-assets:
     summary: Updates the build assets
@@ -214,8 +214,8 @@ tasks:
     vars:
       PLATFORM: "{{.PLATFORM}}"
     preconditions:
-      - sh: npm version
-        msg: "npm is required to bundle OpenClaw runtime. Please install Node.js/npm first."
+      - sh: pnpm --version
+        msg: "pnpm is required to bundle OpenClaw runtime. Please install pnpm first."
       - sh: go run ./internal/tools/notempty "{{.PLATFORM}}"
         msg: "PLATFORM is required. Use: PLATFORM=amd64, PLATFORM=arm64, or PLATFORM=multi"
 

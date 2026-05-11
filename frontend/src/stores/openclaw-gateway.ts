@@ -174,6 +174,9 @@ export const useOpenClawGatewayStore = defineStore('openclawGateway', () => {
   function startHeartbeat() {
     if (heartbeatId != null) return
     subscribeToEvents()
+    // Immediately poll to sync state — backend may have already broadcast PhaseConnected
+    // before the frontend registered its listeners (race condition during startup).
+    void poll()
     heartbeatId = setInterval(() => {
       void poll()
     }, 5000)

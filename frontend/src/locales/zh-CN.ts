@@ -162,6 +162,7 @@ export default {
     assistant: '任务助手',
     openclaw: 'OpenClaw',
     openclawDashboard: 'OpenClaw 控制台',
+    openclawTerminal: '终端',
     knowledge: '知识库',
     scheduledTasks: '定时任务',
     skills: '技能',
@@ -295,6 +296,9 @@ export default {
       starting: '启动中...',
       startSuccess: '网关已启动',
       startFailed: '网关启动失败',
+      gatewayLog: '网关日志',
+      waitingForLog: '等待日志输出...',
+      viewGatewayLog: '查看日志',
       startSteps: {
         resolvedRuntime: '已定位运行时: {path}',
         hotfixApplied: '应用热修复补丁 {count} 个文件',
@@ -379,6 +383,11 @@ export default {
         failed: '执行失败',
         fixed: '已修复',
       },
+      resetToFactory: '恢复出厂设置',
+      resetToFactoryHint: '删除 OpenClaw 数据目录并重启应用，适用于环境异常需要恢复出场设置的情况',
+      resetConfirmTitle: '确认恢复出厂设置',
+      resetConfirmDesc: '此操作将删除 OpenClaw 的全部数据存储文件夹，包括插件、会话历史、频道配置等。操作不可恢复，是否继续？',
+      resetFailed: '恢复出厂设置失败',
     },
     runtimeEnvironment: {
       title: '运行环境安装',
@@ -2115,6 +2124,10 @@ export default {
       upgrading: 'OpenClaw 运行包正在升级，请稍后再试',
       notInstalled: '未检测到 OpenClaw 运行环境，请前往「设置 → 常规设置」或「OpenClaw 管家」安装',
     },
+  },
+  openclawTerminal: {
+    tools: '工具',
+    loading: '加载中...',
   },
   openclawCron: {
     title: '定时任务',
