@@ -19,7 +19,7 @@ import ChatInputArea from './components/ChatInputArea.vue'
 import WorkspaceDrawer from './components/WorkspaceDrawer.vue'
 import SnapModeHeader from './components/SnapModeHeader.vue'
 import { useNavigationStore, useChatStore, useSettingsStore } from '@/stores'
-import type { PendingChatImage } from '@/stores/navigation'
+import type { PendingChatImage, PendingChatFile } from '@/stores/navigation'
 import { type Agent } from '@bindings/chatclaw/internal/services/agents'
 import type { ImagePayload } from '@bindings/chatclaw/internal/services/chat'
 import { Events } from '@wailsio/runtime'
@@ -1545,13 +1545,41 @@ onMounted(() => {
           }
           pendingImages.value = converted
         }
+        // Apply pending files (convert from serializable format to PendingFile)
+        if (pendingData.pendingFiles && pendingData.pendingFiles.length > 0) {
+          const converted: PendingFile[] = []
+          for (const f of pendingData.pendingFiles) {
+            try {
+              // Reconstruct File from base64 data
+              const binaryString = atob(f.base64)
+              const bytes = new Uint8Array(binaryString.length)
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i)
+              }
+              const blob = new Blob([bytes], { type: f.mimeType || 'application/octet-stream' })
+              const file = new File([blob], f.fileName, { type: f.mimeType || 'application/octet-stream' })
+              converted.push({
+                id: f.id,
+                file,
+                mimeType: f.mimeType || 'application/octet-stream',
+                base64: f.base64,
+                fileName: f.fileName,
+                size: f.size,
+              })
+            } catch (e) {
+              console.warn('Failed to convert pending file:', f.fileName, e)
+            }
+          }
+          pendingFiles.value = converted
+        }
         // Ensure we start with a new conversation
         activeConversationId.value = null
 
-        // Auto-send after a short delay to let Vue reactivity settle (text or images)
+        // Auto-send after a short delay to let Vue reactivity settle (text, images, or files)
         const hasContent =
           (pendingData.chatInput?.trim() ?? '') !== '' ||
-          (pendingData.pendingImages?.length ?? 0) > 0
+          (pendingData.pendingImages?.length ?? 0) > 0 ||
+          (pendingData.pendingFiles?.length ?? 0) > 0
         if (hasContent) {
           window.setTimeout(() => {
             if (canSend.value) {

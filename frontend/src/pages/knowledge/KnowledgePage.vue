@@ -219,15 +219,30 @@ interface PendingImage {
   size: number
 }
 
+// Pending files for message
+interface PendingFile {
+  id: string
+  file: File
+  mimeType: string
+  base64: string
+  fileName: string
+  size: number
+}
+
+const pendingFiles = ref<PendingFile[]>([])
+
 // Computed: active agent
 const activeAgent = computed(() => {
   if (activeAgentId.value == null) return null
   return agents.value.find((a) => a.id === activeAgentId.value) ?? null
 })
 
-// Can send: must have input or images, agent, and model
+// Can send: must have input or images or files, agent, and model
 const canSend = computed(() => {
-  const hasContent = chatInput.value.trim() !== '' || pendingImages.value.length > 0
+  const hasContent =
+    chatInput.value.trim() !== '' ||
+    pendingImages.value.length > 0 ||
+    pendingFiles.value.length > 0
   return !!activeAgentId.value && hasContent && !!selectedModelInfo.value
 })
 
@@ -235,7 +250,10 @@ const canSend = computed(() => {
 const sendDisabledReason = computed(() => {
   if (!activeAgentId.value) return t('assistant.placeholders.createAgentFirst')
   if (!selectedModelKey.value) return t('assistant.placeholders.selectModelFirst')
-  const hasContent = chatInput.value.trim() !== '' || pendingImages.value.length > 0
+  const hasContent =
+    chatInput.value.trim() !== '' ||
+    pendingImages.value.length > 0 ||
+    pendingFiles.value.length > 0
   if (!hasContent) return t('assistant.placeholders.enterToSend')
   return ''
 })
@@ -1177,6 +1195,7 @@ const handleSendMessage = () => {
 
   const messageContent = chatInput.value.trim()
   const imagesToSend = [...pendingImages.value]
+  const filesToSend = [...pendingFiles.value]
 
   // Build library IDs array: personal tab uses selected library; team tab uses team library id for recall
   const libraryIds =
@@ -1206,11 +1225,21 @@ const handleSendMessage = () => {
         size: img.size,
       })),
     }),
+    ...(filesToSend.length > 0 && {
+      pendingFiles: filesToSend.map((f) => ({
+        id: f.id,
+        mimeType: f.mimeType,
+        base64: f.base64,
+        fileName: f.fileName,
+        size: f.size,
+      })),
+    }),
   })
 
-  // Clear input and images after sending
+  // Clear input and images/files after sending
   chatInput.value = ''
   pendingImages.value = []
+  pendingFiles.value = []
 }
 
 // Handle add images
@@ -1247,6 +1276,84 @@ const handleAddImages = (files: FileList | File[]) => {
 // Handle remove image
 const handleRemoveImage = (id: string) => {
   pendingImages.value = pendingImages.value.filter((img) => img.id !== id)
+}
+
+// File upload constants
+const ALLOWED_FILE_EXTENSIONS = [
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx',
+  '.ppt',
+  '.pptx',
+  '.txt',
+  '.csv',
+  '.md',
+  '.json',
+  '.xml',
+  '.html',
+  '.rtf',
+  '.log',
+]
+const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
+const MAX_FILES = 4
+
+// Handle add files
+const handleAddFiles = async (files: FileList | File[]) => {
+  const fileArray = Array.from(files)
+  const currentCount = pendingFiles.value.length
+
+  if (currentCount + fileArray.length > MAX_FILES) {
+    toast.error(t('assistant.errors.tooManyFiles', { max: MAX_FILES }))
+    return
+  }
+
+  for (const file of fileArray) {
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase()
+    if (!ALLOWED_FILE_EXTENSIONS.includes(ext)) {
+      toast.error(t('assistant.errors.invalidFileType'))
+      continue
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error(t('assistant.errors.fileTooLarge', { max: '20MB' }))
+      continue
+    }
+
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const dataUrl = reader.result as string
+          const base64Match = dataUrl.match(/^data:[^;]+;base64,(.+)$/)
+          if (base64Match) {
+            resolve(base64Match[1])
+          } else {
+            reject(new Error('Invalid file data'))
+          }
+        }
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+
+      pendingFiles.value.push({
+        id: `${Date.now()}-${Math.random()}`,
+        file,
+        mimeType: file.type || 'application/octet-stream',
+        base64,
+        fileName: file.name,
+        size: file.size,
+      })
+    } catch (error) {
+      console.error('Failed to read file:', error)
+      toast.error(t('assistant.errors.fileReadFailed'))
+    }
+  }
+}
+
+// Handle remove file
+const handleRemoveFile = (id: string) => {
+  pendingFiles.value = pendingFiles.value.filter((f) => f.id !== id)
 }
 </script>
 
@@ -2123,10 +2230,14 @@ const handleRemoveImage = (id: string) => {
           :active-agent="activeAgent"
           :agents="agents"
           :pending-images="pendingImages"
+          :pending-files="pendingFiles"
           @update:selected-team-library-id="selectedTeamLibraryId = $event"
           @send="handleSendMessage"
           @add-images="handleAddImages"
           @remove-image="handleRemoveImage"
+          @add-files="handleAddFiles"
+          @remove-file="handleRemoveFile"
+          @clear-files="pendingFiles = []"
         />
       </div>
     </main>
