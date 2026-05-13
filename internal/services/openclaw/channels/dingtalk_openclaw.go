@@ -17,6 +17,7 @@ import (
 
 const (
 	dingTalkPluginName            = "@dingtalk-real-ai/dingtalk-connector@0.8.8"
+	dingTalkPluginNameLatest      = "@dingtalk-real-ai/dingtalk-connector@latest"
 	dingTalkPluginMarker          = "@dingtalk-real-ai/dingtalk-connector"
 	dingTalkPluginChannelID       = "dingtalk-connector" // channel identifier used in openclaw.json bindings
 	dingTalkPluginForceUnsafeFlag = "--dangerously-force-unsafe-install"
@@ -25,74 +26,79 @@ const (
 )
 
 // ensureDingTalkPluginInstalled checks whether the dingtalk-connector plugin is installed.
+// Tries specific version first (0.8.8), falls back to latest on failure, then returns error.
 func (s *OpenClawChannelService) ensureDingTalkPluginInstalled(ctx context.Context) error {
 	if s.isDingTalkPluginInstalledLocally() {
 		return nil
 	}
 
-	s.app.Logger.Info("openclaw: dingtalk-connector plugin not found, installing", "plugin", dingTalkPluginName)
+	// Try specific version first (0.8.8)
+	s.app.Logger.Info("openclaw: dingtalk-connector plugin not found, installing with specific version 0.8.8", "plugin", dingTalkPluginName)
 
-	const maxAttempts = 4
-	baseDelay := 3 * time.Second
-	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			delay := baseDelay * time.Duration(1<<uint(attempt-1))
-			s.app.Logger.Info("openclaw: retrying plugin installation after rate limit",
-				"attempt", attempt+1, "wait", delay.String())
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(delay):
-			}
-		}
-
-		if err := s.installDingTalkPlugin(ctx, false); err != nil {
-			lastErr = err
-			errStr := strings.ToLower(err.Error())
-			if isDingTalkPluginInstallRateLimited(errStr) {
-				s.app.Logger.Warn("openclaw: plugin install rate limited by ClawHub, will retry",
-					"attempt", attempt+1, "error", err)
-				continue
-			}
-			if isDingTalkPluginSecurityScanBlocked(errStr) {
-				s.app.Logger.Warn("openclaw: dingtalk plugin install blocked by builtin scanner, retrying forced install for pinned plugin",
-					"plugin", dingTalkPluginName, "error", err)
-				if forceErr := s.installDingTalkPlugin(ctx, true); forceErr != nil {
-					return fmt.Errorf("install %s with force flag: %w", dingTalkPluginName, forceErr)
-				}
-				s.app.Logger.Info("openclaw: dingtalk-connector plugin installed successfully with force flag")
-				return nil
-			}
-			return fmt.Errorf("install %s: %w", dingTalkPluginName, err)
-		}
-
-		s.app.Logger.Info("openclaw: dingtalk-connector plugin installed successfully")
+	// Try installing with specific version
+	if err := s.installDingTalkPluginWithVersion(ctx, dingTalkPluginName, false); err == nil {
+		s.app.Logger.Info("openclaw: dingtalk-connector plugin installed successfully (specific version 0.8.8)")
 		return nil
 	}
 
-	return fmt.Errorf("install %s: ClawHub rate limit exceeded after %d attempts, please try again later: %w",
-		dingTalkPluginName, maxAttempts, lastErr)
+	// If specific version fails, try with force flag
+	s.app.Logger.Warn("openclaw: dingtalk-connector plugin 0.8.8 install failed, trying with force flag")
+	if err := s.installDingTalkPluginWithVersion(ctx, dingTalkPluginName, true); err == nil {
+		s.app.Logger.Info("openclaw: dingtalk-connector plugin installed successfully (0.8.8 with force flag)")
+		return nil
+	}
+
+	// Fall back to latest
+	s.app.Logger.Warn("openclaw: dingtalk-connector plugin specific version 0.8.8 install failed, falling back to latest")
+
+	// Try latest without force first
+	if err := s.installDingTalkPluginWithVersion(ctx, dingTalkPluginNameLatest, false); err == nil {
+		s.app.Logger.Info("openclaw: dingtalk-connector plugin installed successfully (latest)")
+		return nil
+	}
+
+	// Try latest with force flag
+	s.app.Logger.Warn("openclaw: dingtalk-connector plugin latest install failed, trying with force flag")
+	if err := s.installDingTalkPluginWithVersion(ctx, dingTalkPluginNameLatest, true); err == nil {
+		s.app.Logger.Info("openclaw: dingtalk-connector plugin installed successfully (latest with force flag)")
+		return nil
+	}
+
+	return errs.New("error.dingtalk_plugin_install_failed")
 }
 
-func (s *OpenClawChannelService) installDingTalkPlugin(ctx context.Context, forceUnsafe bool) error {
+// installDingTalkPluginWithVersion installs the DingTalk plugin with the specified version and optional force flag.
+// Returns nil on success, or a wrapped error with details on failure.
+func (s *OpenClawChannelService) installDingTalkPluginWithVersion(ctx context.Context, pluginVersion string, forceUnsafe bool) error {
 	args := []string{"plugins", "install"}
 	if forceUnsafe {
 		args = append(args, dingTalkPluginForceUnsafeFlag)
 	}
-	args = append(args, dingTalkPluginName)
+	args = append(args, pluginVersion)
 
-	_, err := s.execOpenClawPluginCLI(ctx, args...)
+	out, err := s.execOpenClawPluginCLI(ctx, args...)
 	if err == nil {
 		return nil
 	}
 
-	errStr := strings.ToLower(err.Error())
+	errStr := strings.ToLower(string(out) + " " + err.Error())
 	installedButInterrupted := strings.Contains(errStr, "installed plugin:") && containsDingTalkPluginMarker(errStr)
 	if strings.Contains(errStr, "plugin already exists") || installedButInterrupted {
 		return nil
 	}
-	return err
+
+	// Check for rate limiting and retry
+	if isDingTalkPluginInstallRateLimited(errStr) {
+		return fmt.Errorf("rate limited: %w", err)
+	}
+
+	// Check for security scan block and retry with force
+	if isDingTalkPluginSecurityScanBlocked(errStr) && !forceUnsafe {
+		s.app.Logger.Warn("openclaw: dingtalk plugin install blocked by builtin scanner, retrying with force flag")
+		return s.installDingTalkPluginWithVersion(ctx, pluginVersion, true)
+	}
+
+	return fmt.Errorf("install %s: %w", pluginVersion, err)
 }
 
 func containsDingTalkPluginMarker(out string) bool {

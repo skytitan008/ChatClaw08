@@ -44,6 +44,7 @@ type OpenClawChannelService struct {
 }
 
 const wecomPluginPackage = "@wecom/wecom-openclaw-plugin"
+const wecomPluginSpecificVersion = "2026.4.22"
 const wecomPluginID = "wecom-openclaw-plugin"
 const wecomPluginFallbackTimeout = 2 * time.Minute
 
@@ -1454,15 +1455,37 @@ func (s *OpenClawChannelService) ensureOpenClawWeComPluginInstalled(ctx context.
 	if installed {
 		return nil
 	}
-	if _, installErr := s.execOpenClawPluginCLI(ctx, "plugins", "install", wecomPluginPackage); installErr != nil {
-		installMsg := strings.ToLower(installErr.Error())
+
+	// Try specific version first (2026.4.22)
+	s.app.Logger.Info("openclaw: installing wecom plugin with specific version 2026.4.22", "plugin", wecomPluginPackage)
+	installOut, installErr := s.execOpenClawPluginCLI(ctx, "plugins", "install", wecomPluginPackage+"@"+wecomPluginSpecificVersion)
+	if installErr == nil {
+		s.app.Logger.Info("openclaw: wecom plugin installed successfully (specific version 2026.4.22)")
+		return nil
+	}
+	installMsg := strings.ToLower(string(installOut) + " " + installErr.Error())
+
+	// Check if already installed
+	if strings.Contains(installMsg, "already installed") || strings.Contains(installMsg, "plugin already exists") ||
+		(strings.Contains(installMsg, "installed plugin:") && containsWeComPluginMarker(string(installOut))) {
+		s.app.Logger.Info("openclaw: wecom plugin already installed (specific version 2026.4.22)")
+		return nil
+	}
+
+	s.app.Logger.Warn("openclaw: wecom plugin specific version 2026.4.22 install failed, falling back to latest",
+		"plugin", wecomPluginPackage, "error", installErr)
+
+	// Fall back to latest
+	installOut, installErr = s.execOpenClawPluginCLI(ctx, "plugins", "install", wecomPluginPackage)
+	if installErr != nil {
+		installMsg = strings.ToLower(string(installOut) + " " + installErr.Error())
 		if isWeComPluginInstallRateLimited(installMsg) {
-			s.app.Logger.Warn("openclaw: wecom plugin install rate limited by ClawHub, falling back to npm pack install",
+			s.app.Logger.Warn("openclaw: wecom plugin install (latest) rate limited by ClawHub, falling back to npm pack install",
 				"plugin", wecomPluginPackage, "error", installErr)
 			fallbackCtx, fallbackCancel := context.WithTimeout(context.Background(), wecomPluginFallbackTimeout)
 			defer fallbackCancel()
 			if fallbackErr := s.installOpenClawWeComPluginFromLocalPackage(fallbackCtx); fallbackErr != nil {
-				return fmt.Errorf("openclaw plugins install %s rate-limited, fallback failed: %w", wecomPluginPackage, fallbackErr)
+				return errs.New("error.wecom_plugin_install_failed")
 			}
 			verifyOut, verifyErr := s.execOpenClawPluginCLI(ctx, "plugins", "list")
 			if verifyErr != nil {
@@ -1473,12 +1496,12 @@ func (s *OpenClawChannelService) ensureOpenClawWeComPluginInstalled(ctx context.
 			}
 			return nil
 		}
-		installedButInterrupted := strings.Contains(installMsg, "installed plugin:") && containsWeComPluginMarker(installMsg)
+		installedButInterrupted := strings.Contains(installMsg, "installed plugin:") && containsWeComPluginMarker(string(installOut))
 		if installedButInterrupted {
-			s.app.Logger.Warn("openclaw plugin install interrupted after success marker; will verify by listing plugins", "plugin", wecomPluginPackage, "error", installErr)
+			s.app.Logger.Warn("openclaw plugin install (latest) interrupted after success marker; will verify by listing plugins", "plugin", wecomPluginPackage, "error", installErr)
 		}
 		if !strings.Contains(installMsg, "plugin already exists") && !installedButInterrupted {
-			return fmt.Errorf("openclaw plugins install %s: %w", wecomPluginPackage, installErr)
+			return errs.New("error.wecom_plugin_install_failed")
 		}
 	}
 	verifyOut, verifyErr := s.execOpenClawPluginCLI(ctx, "plugins", "list")
