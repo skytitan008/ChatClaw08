@@ -70,6 +70,15 @@ export interface PendingChatImage {
   size: number
 }
 
+/** Serializable file data for pending chat (e.g. from knowledge page) */
+export interface PendingChatFile {
+  id: string
+  mimeType: string
+  base64: string
+  fileName: string
+  size: number
+}
+
 /**
  * Pending chat data for cross-module navigation.
  * E.g. Knowledge page can pre-fill chat input and jump to a new assistant tab.
@@ -91,6 +100,8 @@ export interface PendingChatData {
   chatMode?: string
   /** Pending images (e.g. from knowledge page input) */
   pendingImages?: PendingChatImage[]
+  /** Pending files (e.g. from knowledge page input) */
+  pendingFiles?: PendingChatFile[]
   /** Target tab ID that should consume this data */
   targetTabId: string
   /** Module of the tab that should consume this data */

@@ -19,16 +19,14 @@ import (
 )
 
 const (
-	wechatCLIPackage                = "@tencent-weixin/openclaw-weixin-cli"
-	wechatCLIPackageWithTag         = "@tencent-weixin/openclaw-weixin-cli@latest"
-	wechatPluginPackageName         = "@tencent-weixin/openclaw-weixin"
-	wechatPluginID                  = "openclaw-weixin"
-	wechatPluginInstallTimeout      = 5 * time.Minute
-	wechatLoginWaitTimeout          = 5 * time.Minute
-	wechatExtensionSubdir           = "extensions/openclaw-weixin"
-	wechatInstallStagePrefix        = ".openclaw-install-stage-"
-	wechatNPXInstallMaxAttempts     = 4
-	wechatDefaultAppID              = "bot"
+	wechatPluginPackage             = "@tencent-weixin/openclaw-weixin"
+	wechatPluginID                 = "openclaw-weixin"
+	wechatPluginInstallTimeout     = 5 * time.Minute
+	wechatLoginWaitTimeout         = 5 * time.Minute
+	wechatExtensionSubdir          = "extensions/openclaw-weixin"
+	wechatInstallStagePrefix       = ".openclaw-install-stage-"
+	wechatPluginInstallMaxAttempts = 4
+	wechatDefaultAppID             = "bot"
 	wechatPluginPackageManifestName = "package.json"
 )
 
@@ -146,7 +144,7 @@ func (s *OpenClawChannelService) cleanupStaleWechatPluginInstallStages() {
 
 	extensionsDir := filepath.Join(stateDir, "extensions")
 	installedDir := filepath.Join(stateDir, wechatExtensionSubdir)
-	removed, err := removeStalePluginInstallStageDirs(extensionsDir, installedDir, wechatPluginPackageName)
+	removed, err := removeStalePluginInstallStageDirs(extensionsDir, installedDir, wechatPluginPackage)
 	if err != nil {
 		s.app.Logger.Warn("openclaw: failed to clean stale wechat plugin install stage", "extensions", extensionsDir, "error", err)
 		return
@@ -449,14 +447,41 @@ func isWechatInstallTransientFailure(msg string) bool {
 		strings.Contains(m, "context canceled")
 }
 
-// installWechatPluginViaNPXWithRetry runs the official CLI installer via npx with backoff (network / registry flakiness).
-func (s *OpenClawChannelService) installWechatPluginViaNPXWithRetry(ctx context.Context) error {
-	if s.openclawManager == nil {
-		return fmt.Errorf("openclaw manager not available")
+// installWechatPluginViaOpenClawCLI installs the WeChat plugin via OpenClaw CLI with retry.
+// Tries specific version first (2.1.10), falls back to latest on failure, then returns error.
+func (s *OpenClawChannelService) installWechatPluginViaOpenClawCLI(ctx context.Context) error {
+	// Try specific version first (2.1.10)
+	s.app.Logger.Info("openclaw: installing wechat plugin with specific version 2.1.10", "plugin", wechatPluginPackageWithVersion("2.1.10"))
+	if err := s.installWechatPluginWithVersion(ctx, "2.1.10"); err == nil {
+		s.app.Logger.Info("openclaw: wechat plugin installed successfully (specific version 2.1.10)")
+		return nil
 	}
+
+	s.app.Logger.Warn("openclaw: wechat plugin specific version 2.1.10 install failed, falling back to latest")
+
+	// Fall back to latest
+	s.app.Logger.Info("openclaw: installing wechat plugin with latest version", "plugin", wechatPluginPackage)
+	if err := s.installWechatPluginWithVersion(ctx, "latest"); err == nil {
+		s.app.Logger.Info("openclaw: wechat plugin installed successfully (latest)")
+		return nil
+	}
+
+	return errs.New("error.wechat_plugin_install_failed")
+}
+
+// installWechatPluginWithVersion installs the WeChat plugin with the specified version tag.
+func (s *OpenClawChannelService) installWechatPluginWithVersion(ctx context.Context, versionTag string) error {
+	pluginSpec := wechatPluginPackageWithVersion(versionTag)
+	return s.installWechatPluginWithSpec(ctx, pluginSpec)
+}
+
+// installWechatPluginWithSpec installs the WeChat plugin with the specified package spec.
+func (s *OpenClawChannelService) installWechatPluginWithSpec(ctx context.Context, pluginSpec string) error {
+	const maxAttempts = 4
 	baseDelay := 3 * time.Second
 	var lastErr error
-	for attempt := 0; attempt < wechatNPXInstallMaxAttempts; attempt++ {
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			delay := baseDelay * time.Duration(1<<uint(attempt-1))
 			select {
@@ -465,26 +490,49 @@ func (s *OpenClawChannelService) installWechatPluginViaNPXWithRetry(ctx context.
 			case <-time.After(delay):
 			}
 		}
-		out, err := s.openclawManager.ExecNpx(ctx, "-y", wechatCLIPackageWithTag, "install")
+
+		out, err := s.execOpenClawPluginCLI(ctx, "plugins", "install", pluginSpec)
 		if err == nil {
-			s.app.Logger.Info("openclaw: wechat plugin installed successfully")
 			return nil
 		}
+
+		errStr := strings.ToLower(string(out) + " " + err.Error())
 		lastErr = err
-		combined := string(out) + " " + err.Error()
-		outStr := strings.ToLower(combined)
-		if strings.Contains(outStr, "already installed") || strings.Contains(outStr, "plugin already exists") {
-			s.app.Logger.Info("openclaw: wechat plugin already installed (marker in output)")
+
+		// Check if already installed
+		if strings.Contains(errStr, "already installed") || strings.Contains(errStr, "plugin already exists") ||
+			(strings.Contains(errStr, "installed plugin:") && containsWechatPluginMarker(errStr)) {
+			s.app.Logger.Info("openclaw: wechat plugin already installed", "plugin", pluginSpec)
 			return nil
 		}
-		if isWechatInstallTransientFailure(combined) {
-			s.app.Logger.Warn("openclaw: wechat npx install transient failure, retrying",
-				"attempt", attempt+1, "error", err)
+
+		// Check for rate limiting
+		if isWechatInstallTransientFailure(errStr) {
+			s.app.Logger.Warn("openclaw: wechat plugin install transient failure, retrying",
+				"attempt", attempt+1, "plugin", pluginSpec, "error", err)
 			continue
 		}
-		return fmt.Errorf("install wechat plugin: %w", err)
+
+		// Non-retryable error
+		return fmt.Errorf("install wechat plugin %s: %w", pluginSpec, err)
 	}
-	return fmt.Errorf("install wechat plugin after %d attempts: %w", wechatNPXInstallMaxAttempts, lastErr)
+
+	return fmt.Errorf("install wechat plugin (retried %d times): %w", maxAttempts, lastErr)
+}
+
+// containsWechatPluginMarker checks if the output contains the wechat plugin marker.
+func containsWechatPluginMarker(out string) bool {
+	out = strings.ToLower(out)
+	return strings.Contains(out, strings.ToLower(wechatPluginPackage)) ||
+		strings.Contains(out, strings.ToLower(wechatPluginID))
+}
+
+// wechatPluginPackageWithVersion returns the wechat plugin package name with the specified version tag.
+func wechatPluginPackageWithVersion(version string) string {
+	if version == "latest" {
+		return wechatPluginPackage
+	}
+	return wechatPluginPackage + "@" + version
 }
 
 // ensureWechatPluginBackgroundInstallStarted starts a background install if none is running. Returns true if this call started it.
@@ -566,8 +614,8 @@ func (s *OpenClawChannelService) ensureWechatPluginInstalled(ctx context.Context
 
 	// Step 1: install if the plugin directory is absent.
 	if !s.isWechatPluginInstalledLocally() {
-		s.app.Logger.Info("openclaw: wechat plugin not found, installing", "package", wechatCLIPackage)
-		if err := s.installWechatPluginViaNPXWithRetry(ctx); err != nil {
+		s.app.Logger.Info("openclaw: wechat plugin not found, installing", "package", wechatPluginPackage)
+		if err := s.installWechatPluginViaOpenClawCLI(ctx); err != nil {
 			return err
 		}
 		needsRestart = true
